@@ -1,0 +1,17 @@
+[
+  {
+    "name": "libpcap",
+    "url": "https://github.com/the-tcpdump-group/libpcap.git",
+    "commit": "a18ae691ffb2bdec821d91d193a25c59b497ef36"
+  },
+  {
+    "name": "tcpdump",
+    "url": "https://github.com/the-tcpdump-group/tcpdump.git",
+    "commit": "e58af03ef1ae8c42130cf8fadc32b374397ba605"
+  },
+  {
+    "name": "cpp-httplib",
+    "url": "https://github.com/yhirose/cpp-httplib.git",
+    "commit": "9458c27c7c098df86cfdbd9687961b82fd12b0f4"
+  }
+]

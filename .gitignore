@@ -1,0 +1,15 @@
+/build*/
+/references/
+/environment/downloads/
+/environment/logs/
+/environment/
+/scripts/restart-wsl-service.ps1
+/.humanize/
+*.pdf
+*.pcap
+*.pcapng
+__pycache__/
+*.pyc
+/.cache/
+/.venv/
+*.log

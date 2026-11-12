@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>WireLens · 网络观察工作台</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">W/</span><strong>WireLens</strong><span class="subtitle">网络观察工作台</span></div>
+    <div class="connection"><span id="state" role="status">正在连接</span><span id="version" class="mono"></span></div>
+  </header>
+  <main>
+    <form id="capture-form" class="capture-bar">
+      <label class="interface-control">捕获接口<select id="interface" required aria-label="捕获网络接口"><option value="">正在读取接口…</option></select></label>
+      <label class="bpf-control">捕获过滤器 <span class="hint">BPF</span><input id="bpf" placeholder="例如 tcp port 80" autocomplete="off" spellcheck="false"></label>
+      <button id="start" type="submit" class="primary" disabled>▶ 开始捕获</button>
+      <button id="stop" type="button" disabled>■ 停止</button>
+      <button id="export" type="button" disabled>↓ 导出 pcap</button>
+    </form>
+    <div id="error" class="notice error" role="alert" hidden></div>
+    <div class="filter-bar">
+      <div id="protocols" class="protocols" role="group" aria-label="协议筛选"></div>
+      <label class="search"><span class="sr-only">搜索数据包</span><input id="search" type="search" placeholder="搜索地址、端口或摘要" autocomplete="off"></label>
+      <button id="flows-button" type="button">TCP 会话</button>
+    </div>
+    <div id="flow-filter" class="flow-filter" hidden><span id="flow-label"></span><button id="clear-flow" type="button">清除会话筛选 ×</button></div>
+    <div id="gap" class="notice" role="status" hidden></div>
+    <div class="workspace">
+      <section class="pane packets-pane" aria-labelledby="packets-title">
+        <div class="pane-heading"><h1 id="packets-title"><span>01</span> 数据包</h1><span id="visible-count">0 条</span></div>
+        <div class="table-scroll" id="packet-scroll" tabindex="0" aria-label="数据包列表，使用上下方向键选择，Home 和 End 跳转">
+          <table class="packet-table"><thead><tr><th scope="col">编号 / 时间</th><th scope="col">来源 → 目标</th><th scope="col">协议 / 字节</th><th scope="col">摘要</th></tr></thead><tbody id="packet-body"></tbody></table>
+          <div id="empty" class="empty"><strong>准备观察网络</strong><p>选择网络接口，开始捕获数据包。</p><span class="mono">WAITING FOR PACKETS</span></div>
+        </div>
+        <div class="pane-foot">↑ ↓ 选择数据包 <span>最多显示最近 1,000 条</span></div>
+      </section>
+      <section class="pane detail-pane" aria-labelledby="detail-title">
+        <div class="pane-heading"><h2 id="detail-title"><span>02</span> 协议详情</h2><span id="detail-id" class="mono">—</span></div>
+        <div id="detail-warning" class="notice" hidden></div>
+        <div id="fields" class="fields"><p class="placeholder">选择数据包，查看协议字段。</p></div>
+        <button id="follow" type="button" class="follow" disabled>查看此 TCP 会话 →</button>
+      </section>
+      <section class="pane hex-pane" aria-labelledby="hex-title">
+        <div class="pane-heading"><h2 id="hex-title"><span>03</span> 原始字节</h2><span class="mono">HEX / ASCII</span></div>
+        <div id="byte-range" class="byte-range" role="status">选择字段可定位对应字节</div>
+        <div id="hex" class="hex"><p class="placeholder">等待选择数据包。</p></div>
+      </section>
+    </div>
+  </main>
+  <footer class="statusbar" aria-label="捕获统计"><span>保留 <b id="retained">0</b></span><span>已接收 <b id="received">0</b></span><span>淘汰 <b id="evicted">0</b></span><span>内存 <b id="bytes">0 B</b></span><span>丢包 <b id="dropped">—</b></span><span id="status-note">等待连接本地捕获服务</span></footer>
+  <dialog id="flows-dialog" aria-labelledby="flows-title"><div class="dialog-head"><h2 id="flows-title">TCP 会话</h2><button id="close-flows" aria-label="关闭 TCP 会话" type="button">关闭 ×</button></div><p class="dialog-hint">选择会话以筛选数据包 · 最多显示最近 500 个会话</p><div id="flows" class="flows"></div></dialog>
+</body>
+</html>
