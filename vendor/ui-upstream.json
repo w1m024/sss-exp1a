@@ -1,0 +1,33 @@
+{
+  "devtools": {
+    "repository": "https://github.com/ChromeDevTools/devtools-frontend",
+    "modified": false,
+    "commit": "691ae5f55d345edbc832dca175590cdc02fe4c73",
+    "files": [
+      "record-start.svg",
+      "record-stop.svg",
+      "filter.svg",
+      "download.svg",
+      "clear-list.svg",
+      "search.svg",
+      "right-panel-close.svg"
+    ],
+    "license": "BSD-3-Clause",
+    "sourceDirectory": "front_end/Images/src"
+  },
+  "splitjs": {
+    "repository": "https://github.com/nathancahill/split",
+    "license": "MIT",
+    "modified": false,
+    "commit": "48759432a50510e2ed762109d5a8d12a3aac9e63",
+    "file": "packages/splitjs/src/split.js"
+  },
+  "echarts": {
+    "repository": "https://github.com/apache/echarts",
+    "tag": "6.0.0",
+    "file": "dist/echarts.min.js",
+    "license": "Apache-2.0",
+    "modified": false,
+    "sha256": "baa8dfe7e1d9336b98e8986ba7e20ea15e7cdbea1ef42a59d59478632fa45a1d"
+  }
+}

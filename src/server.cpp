@@ -125,8 +125,23 @@ int main(int argc, char **argv) {
         server.Get("/api/packets", json_route([&](const auto& req) {
             auto search = req.get_param_value("search"), flow = req.get_param_value("flow");
             if (search.size() > 256 || flow.size() > 64) throw std::invalid_argument("Display filter too long");
+            auto time_param = [&](const char* name) -> std::optional<int64_t> {
+                if (!req.has_param(name)) return {};
+                auto value = number(req.get_param_value(name));
+                if (!value || value > uint64_t(std::numeric_limits<int64_t>::max()))
+                    throw std::invalid_argument("Time must be a positive int64 microsecond value");
+                return int64_t(value);
+            };
             return capture.packets_json(req.has_param("after") ? number(req.get_param_value("after")) : 0,
-                req.has_param("protocol") ? req.get_param_value("protocol") : "ALL", search, flow);
+                req.has_param("protocol") ? req.get_param_value("protocol") : "ALL", search, flow, time_param("from_us"), time_param("to_us"));
+        }));
+        server.Get("/api/timeline", json_route([&](const auto& req) {
+            auto search = req.get_param_value("search"), flow = req.get_param_value("flow");
+            if (search.size() > 256 || flow.size() > 64) throw std::invalid_argument("Display filter too long");
+            auto bins = req.has_param("bins") ? number(req.get_param_value("bins")) : 80;
+            if (bins < 16 || bins > 200) throw std::invalid_argument("Bins must be 16..200");
+            return capture.timeline_json(req.has_param("after") ? number(req.get_param_value("after")) : 0,
+                req.has_param("protocol") ? req.get_param_value("protocol") : "ALL", search, flow, std::size_t(bins));
         }));
         server.Get(R"(/api/packets/(\d+))", [&](const auto& req, auto& res) {
             try {
@@ -140,11 +155,16 @@ int main(int argc, char **argv) {
             res.set_header("Content-Disposition", "attachment; filename=wirelens.pcap");
             res.set_content(capture.export_pcap(), "application/vnd.tcpdump.pcap");
         });
-        for (const auto& entry : std::vector<std::pair<std::string, std::string>>{{"/", "index.html"}, {"/app.css", "app.css"}, {"/app.js", "app.js"}}) {
+        std::vector<std::pair<std::string, std::string>> assets{{"/", "index.html"}, {"/app.css", "app.css"}, {"/app.js", "app.js"}, {"/timeline.js", "timeline.js"}, {"/vendor/split.js", "vendor/split.js"}, {"/vendor/echarts.min.js", "vendor/echarts.min.js"}};
+        for (const auto& name : {"record-start", "record-stop", "filter", "download", "clear-list", "search", "right-panel-close"}) {
+            auto file = std::string("vendor/devtools/") + name + ".svg";
+            assets.emplace_back('/' + file, file);
+        }
+        for (const auto& entry : assets) {
             std::ifstream input(web + '/' + entry.second, std::ios::binary);
             if (!input) throw std::runtime_error("Missing web asset: " + entry.second);
             std::string content((std::istreambuf_iterator<char>(input)), {});
-            auto type = entry.second == "index.html" ? "text/html; charset=utf-8" : entry.second == "app.css" ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
+            auto type = entry.second == "index.html" ? "text/html; charset=utf-8" : entry.second == "app.css" ? "text/css; charset=utf-8" : entry.second.size() >= 4 && entry.second.substr(entry.second.size() - 4) == ".svg" ? "image/svg+xml" : "text/javascript; charset=utf-8";
             server.Get(entry.first, [content, type](const auto&, auto& res) { res.set_content(content, type); });
         }
         server.set_error_handler([](const auto&, auto& res) { if (res.body.empty()) failure(res, res.status, "Request not supported"); });

@@ -3,6 +3,8 @@
 #include <arpa/inet.h>
 #include <limits>
 #include <utility>
+#include <iomanip>
+#include <sstream>
 
 namespace wirelens {
 namespace {
@@ -21,6 +23,14 @@ struct Decoder {
     }
     void number(const char* s, const char* n, uint64_t v, std::size_t o, std::size_t l) {
         field(s, n, std::to_string(v), o, l);
+    }
+    void mac(const char* name, std::size_t offset) {
+        std::ostringstream text;
+        for (std::size_t i = 0; i < 6; ++i) {
+            if (i) text << ':';
+            text << std::hex << std::setw(2) << std::setfill('0') << unsigned(p.bytes[offset + i]);
+        }
+        field("Ethernet", name, text.str(), offset, 6);
     }
     void address(const char* section, std::size_t o, int family, bool source) {
         char text[INET6_ADDRSTRLEN] = {};
@@ -74,6 +84,7 @@ struct Decoder {
             } else {
                 auto length = u16(o + 4);
                 number("UDP", "length", length, o + 4, 2);
+                number("UDP", "checksum", u16(o + 6), o + 6, 2);
                 if (length < 8 || length > end - o) { p.malformed = true; return; }
                 end = o + length;
                 if (end > p.bytes.size()) p.truncated = true;
@@ -85,6 +96,9 @@ struct Decoder {
                 p.tcp_sequence = u32(o + 4); p.tcp_ack = u32(o + 8); p.tcp_flag_bits = p.bytes[o + 13];
                 number("TCP", "sequence", p.tcp_sequence, o + 4, 4);
                 number("TCP", "acknowledgment", p.tcp_ack, o + 8, 4);
+                number("TCP", "header_length", header, o + 12, 1);
+                number("TCP", "window", u16(o + 14), o + 14, 2);
+                number("TCP", "checksum", u16(o + 16), o + 16, 2);
                 const char* names[] = {"FIN", "SYN", "RST", "PSH", "ACK", "URG", "ECE", "CWR"};
                 for (unsigned i = 0; i < 8; ++i) if (p.tcp_flag_bits & (1u << i)) {
                     if (!p.tcp_flags.empty()) p.tcp_flags += " ";
@@ -109,6 +123,8 @@ struct Decoder {
             if (end > p.bytes.size()) p.truncated = true;
             number("IPv6", "payload_length", u16(o + 4), o + 4, 2);
             number("IPv6", "next_header", p.bytes[o + 6], o + 6, 1);
+            number("IPv6", "hop_limit", p.bytes[o + 7], o + 7, 1);
+            number("IPv6", "flow_label", u32(o) & 0xfffff, o, 4);
             address("IPv6", o + 8, AF_INET6, true); address("IPv6", o + 24, AF_INET6, false);
             const auto next = p.bytes[o + 6];
             if (next == 44) {
@@ -134,6 +150,9 @@ struct Decoder {
             p.fragmented = (u16(o + 6) & 0x3fff) != 0;
             number("IPv4", "fragment_offset_flags", u16(o + 6), o + 6, 2);
             number("IPv4", "protocol", p.bytes[o + 9], o + 9, 1);
+            number("IPv4", "identification", u16(o + 4), o + 4, 2);
+            number("IPv4", "ttl", p.bytes[o + 8], o + 8, 1);
+            number("IPv4", "checksum", u16(o + 10), o + 10, 2);
             transport(o + header, p.bytes[o + 9]);
         }
     }
@@ -143,6 +162,7 @@ struct Decoder {
         case 1:
             if (!need(0, 14)) return;
             type = u16(12); o = 14;
+            mac("destination_mac", 0); mac("source_mac", 6);
             number("Ethernet", "type", type, 12, 2);
             for (int tags = 0; type == 0x8100 || type == 0x88a8 || type == 0x9100; ++tags) {
                 if (tags == 2) { p.malformed = true; return; }

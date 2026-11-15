@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cstring>
 #include <set>
+#include <limits>
 #include <stdexcept>
 #include <sstream>
 #include <chrono>
@@ -268,10 +269,25 @@ std::string Capture::packet_summary(const Packet& p) {
         << ",\"fragmented\":" << (p.fragmented ? "true" : "false") << '}';
     return out.str();
 }
-std::string Capture::packets_json(uint64_t after, const std::string& protocol,
-                                 const std::string& search, const std::string& flow) const {
+namespace {
+void validate_protocol(const std::string& protocol) {
     static const std::set<std::string> protocols{"ALL", "HTTP", "TCP", "UDP", "IPv4", "IPv6", "ICMP", "ICMPv6", "UNKNOWN"};
     if (!protocols.count(protocol)) throw std::invalid_argument("Unknown display protocol");
+}
+bool matches(const Packet& p, const std::string& protocol,
+             const std::string& needle, const std::string& flow) {
+    if (protocol != "ALL" && p.protocol != protocol && p.network != protocol && p.transport != protocol) return false;
+    if (!flow.empty() && p.flow_id != flow) return false;
+    return needle.empty() || lower(p.source + " " + p.destination + " " + p.summary + " " + p.protocol + " "
+        + std::to_string(p.source_port) + " " + std::to_string(p.destination_port)).find(needle) != std::string::npos;
+}
+}
+std::string Capture::packets_json(uint64_t after, const std::string& protocol,
+                                 const std::string& search, const std::string& flow,
+                                 std::optional<int64_t> from_us, std::optional<int64_t> to_us) const {
+    validate_protocol(protocol);
+    if ((from_us && *from_us <= 0) || (to_us && *to_us <= 0) ||
+        (from_us && to_us && *from_us > *to_us)) throw std::invalid_argument("Invalid time interval");
     std::lock_guard<std::mutex> lock(mutex_);
     auto needle = lower(search);
     uint64_t cursor = after;
@@ -280,10 +296,8 @@ std::string Capture::packets_json(uint64_t after, const std::string& protocol,
     for (const auto& p : packets_) {
         if (p.id <= after) continue;
         cursor = p.id;
-        if (protocol != "ALL" && p.protocol != protocol && p.network != protocol && p.transport != protocol) continue;
-        if (!flow.empty() && p.flow_id != flow) continue;
-        if (!needle.empty() && lower(p.source + " " + p.destination + " " + p.summary + " " + p.protocol + " "
-                + std::to_string(p.source_port) + " " + std::to_string(p.destination_port)).find(needle) == std::string::npos) continue;
+        if (!matches(p, protocol, needle, flow)) continue;
+        if ((from_us && p.timestamp_us < *from_us) || (to_us && p.timestamp_us > *to_us)) continue;
         if (count++) result += ',';
         result += packet_summary(p);
         if (count == 250) break;
@@ -291,6 +305,57 @@ std::string Capture::packets_json(uint64_t after, const std::string& protocol,
     auto oldest = packets_.empty() ? next_id_ : packets_.front().id;
     return result + "],\"cursor\":" + std::to_string(cursor) + ",\"oldest_id\":" + std::to_string(oldest)
         + ",\"gap\":" + ((after && oldest > after && oldest - after > 1) ? "true" : "false") + '}';
+}
+std::string Capture::timeline_json(uint64_t after, const std::string& protocol,
+                                  const std::string& search, const std::string& flow, std::size_t bins) const {
+    validate_protocol(protocol);
+    if (bins < 16 || bins > 200) throw std::invalid_argument("Bins must be 16..200");
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto needle = lower(search);
+    std::vector<const Packet*> selected;
+    int64_t start = 0, end = 0;
+    uint64_t bytes = 0;
+    for (const auto& p : packets_) {
+        if (p.id <= after || !matches(p, protocol, needle, flow)) continue;
+        if (selected.empty()) start = end = p.timestamp_us;
+        else { start = std::min(start, p.timestamp_us); end = std::max(end, p.timestamp_us); }
+        selected.push_back(&p);
+        bytes += p.wire_length;
+    }
+    // Unsigned subtraction also handles timestamps spanning the signed zero boundary.
+    uint64_t span = uint64_t(end) - uint64_t(start);
+    if (!selected.empty() && span < 1000) {
+        if (start > std::numeric_limits<int64_t>::max() - 1000)
+            throw std::invalid_argument("Timeline timestamp cannot be padded");
+        end = start + 1000;
+        span = 1000;
+    }
+    std::ostringstream out;
+    out << "{\"session\":" << session_ << ",\"oldest_id\":" << (packets_.empty() ? next_id_ : packets_.front().id)
+        << ",\"latest_id\":" << next_id_ - 1 << ",\"matched\":" << selected.size() << ",\"bytes\":" << bytes
+        << ",\"start_us\":" << start << ",\"end_us\":" << end << ",\"bins\":[";
+    if (!selected.empty()) {
+        // floor(span * i / bins), without overflowing the multiplication.
+        auto offset = [&](std::size_t i) { return span / bins * i + (span % bins) * i / bins; };
+        std::vector<uint64_t> counts(bins), sizes(bins);
+        for (const auto* p : selected) {
+            const auto delta = uint64_t(p->timestamp_us) - uint64_t(start);
+            std::size_t lo = 0, hi = bins;
+            while (lo + 1 < hi) {
+                auto mid = (lo + hi) / 2;
+                if (offset(mid) <= delta) lo = mid; else hi = mid;
+            }
+            ++counts[lo]; sizes[lo] += p->wire_length;
+        }
+        for (std::size_t i = 0; i < bins; ++i) {
+            if (i) out << ',';
+            out << "{\"start_us\":" << int64_t(uint64_t(start) + offset(i))
+                << ",\"end_us\":" << int64_t(uint64_t(start) + offset(i + 1))
+                << ",\"packets\":" << counts[i] << ",\"bytes\":" << sizes[i] << '}';
+        }
+    }
+    out << "]}";
+    return out.str();
 }
 std::string Capture::packet_json(uint64_t id) const {
     std::lock_guard<std::mutex> lock(mutex_);

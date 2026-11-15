@@ -2,6 +2,7 @@
 #include "packet.hpp"
 #include <deque>
 #include <map>
+#include <optional>
 #include <mutex>
 #include <thread>
 #include <condition_variable>
@@ -17,7 +18,10 @@ public:
     void stop();
     std::string status_json() const;
     std::string packets_json(uint64_t after, const std::string& protocol,
-                             const std::string& search, const std::string& flow) const;
+                             const std::string& search, const std::string& flow,
+                             std::optional<int64_t> from_us = {}, std::optional<int64_t> to_us = {}) const;
+    std::string timeline_json(uint64_t after, const std::string& protocol,
+                              const std::string& search, const std::string& flow, std::size_t bins) const;
     std::string packet_json(uint64_t id) const;
     std::string flows_json() const;
     std::string export_pcap() const;
