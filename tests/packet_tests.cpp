@@ -144,8 +144,42 @@ void all_prefixes() {
         }
     }
 }
+void dns_detection() {
+    Bytes query{0x12,0x34,1,0,0,1,0,0,0,0,0,0,3,'w','w','w',7,'e','x','a','m','p','l','e',3,'c','o','m',0,0,1,0,1};
+    auto udp = [](const Bytes& payload, unsigned port = 53) {
+        Bytes b(8); put16(b, 0, 12345); put16(b, 2, port); put16(b, 4, unsigned(payload.size() + 8));
+        b.insert(b.end(), payload.begin(), payload.end()); return b;
+    };
+    auto p = parse(v4(udp(query), 17));
+    CHECK(p.protocol == "DNS" && p.transport == "UDP");
+    CHECK(p.summary.find("www.example.com") != std::string::npos);
+    CHECK(parse(v6(udp(query), 17)).protocol == "DNS");
+    CHECK(parse(v4(udp(query, 5353), 17)).protocol == "DNS");
+    CHECK(parse(v4(udp(query, 9999), 17)).protocol == "UDP");
+    auto response = query; response[2] = 0x81; response[3] = 0x80; response[7] = 1;
+    const Bytes answer{0xc0,0x0c,0,1,0,1,0,0,0,60,0,4,192,0,2,123};
+    response.insert(response.end(), answer.begin(), answer.end());
+    p = parse(v4(udp(response), 17)); CHECK(p.protocol == "DNS");
+    bool address = false;
+    for (const auto& f : p.fields) if (f.name == "address_ipv4") { CHECK(f.value == "192.0.2.123"); address = true; }
+    CHECK(address);
+    for (std::size_t n = 0; n < response.size(); ++n) {
+        CHECK(parse(v4(udp(Bytes(response.begin(), response.begin() + n)), 17)).protocol != "DNS");
+    }
+    auto invalid = response; invalid[query.size() + 1] = uint8_t(query.size());
+    CHECK(parse(v4(udp(invalid), 17)).protocol == "UDP"); // self pointer
+    invalid = query; invalid[12] = 0xff; CHECK(parse(v4(udp(invalid), 17)).protocol == "UDP");
+    invalid = query; invalid[4] = 0xff; CHECK(parse(v4(udp(invalid), 17)).protocol == "UDP");
+    Bytes prefixed(2); put16(prefixed, 0, unsigned(query.size())); prefixed.insert(prefixed.end(), query.begin(), query.end());
+    CHECK(parse(v4(tcp(std::string(prefixed.begin(), prefixed.end()), 53))).protocol == "DNS");
+    auto padding = v4(udp(query), 17); padding.insert(padding.end(), 20, 0xff);
+    CHECK(parse(padding).protocol == "DNS");
+    for (std::size_t i = 0; i < response.size(); ++i) {
+        auto mutated = response; mutated[i] = 0xff; parse(v4(udp(mutated), 17));
+    }
+}
 int main() {
-    links_and_fields(); lengths_and_fragments(); ipv6(); http_detection(); all_prefixes();
+    links_and_fields(); lengths_and_fragments(); ipv6(); http_detection(); dns_detection(); all_prefixes();
     std::cout << "packet tests passed\n";
     return 0;
 }

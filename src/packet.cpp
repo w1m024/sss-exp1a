@@ -1,4 +1,5 @@
 #include "packet.hpp"
+#include "dns.hpp"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <limits>
@@ -106,6 +107,13 @@ struct Decoder {
                 }
                 field("TCP", "flags", p.tcp_flags, o + 13, 1);
                 http(o + header);
+                if ((p.source_port == 53 || p.destination_port == 53) && end <= p.bytes.size() && end >= o + header + 2) {
+                    auto start = o + header;
+                    const auto length = u16(start);
+                    if (length == end - start - 2) decode_dns(p, start + 2, length);
+                }
+            } else if ((p.source_port == 53 || p.destination_port == 53 || p.source_port == 5353 || p.destination_port == 5353) && end <= p.bytes.size()) {
+                decode_dns(p, o + header, end - o - header);
             }
         } else if (need(o, 8)) {
             number(p.transport.c_str(), "type", p.bytes[o], o, 1);
@@ -206,7 +214,7 @@ Packet decode_packet(std::vector<uint8_t> bytes, int datalink, int64_t timestamp
     d.end = std::numeric_limits<std::size_t>::max();
     d.p.truncated = wire_length > d.p.bytes.size();
     d.decode();
-    d.p.summary = d.p.http_line.empty() ? d.p.protocol : d.p.http_line;
+    if (d.p.summary.empty()) d.p.summary = d.p.http_line.empty() ? d.p.protocol : d.p.http_line;
     if (!d.p.source.empty()) d.p.summary += " " + d.p.source + " -> " + d.p.destination;
     if (d.p.fragmented) d.p.summary += " [fragmented]";
     if (d.p.malformed) d.p.summary += " [malformed]";

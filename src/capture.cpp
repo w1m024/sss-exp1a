@@ -271,7 +271,7 @@ std::string Capture::packet_summary(const Packet& p) {
 }
 namespace {
 void validate_protocol(const std::string& protocol) {
-    static const std::set<std::string> protocols{"ALL", "HTTP", "TCP", "UDP", "IPv4", "IPv6", "ICMP", "ICMPv6", "UNKNOWN"};
+    static const std::set<std::string> protocols{"ALL", "HTTP", "DNS", "TCP", "UDP", "IPv4", "IPv6", "ICMP", "ICMPv6", "UNKNOWN"};
     if (!protocols.count(protocol)) throw std::invalid_argument("Unknown display protocol");
 }
 bool matches(const Packet& p, const std::string& protocol,

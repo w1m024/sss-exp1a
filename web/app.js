@@ -260,7 +260,7 @@ import Split from './vendor/split.js';
     model.filterInvalid = false; resetPackets(); void poll();
   }
   const protocolFragment = document.createDocumentFragment();
-  for (const protocol of ['ALL', 'HTTP', 'TCP', 'UDP', 'IPv4', 'IPv6', 'ICMP', 'ICMPv6']) {
+  for (const protocol of ['ALL', 'HTTP', 'DNS', 'TCP', 'UDP', 'IPv4', 'IPv6', 'ICMP', 'ICMPv6']) {
     const button = el('button', protocol); button.type = 'button'; button.setAttribute('aria-pressed', String(protocol === 'ALL'));
     button.setAttribute('aria-label', protocol === 'ALL' ? '显示所有协议' : `筛选 ${protocol} 协议`);
     button.addEventListener('click', () => {
