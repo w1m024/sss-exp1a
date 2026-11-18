@@ -154,6 +154,7 @@ try {
   assert(await evaluate("document.getElementById('state').dataset.state==='stopped'"), 'invalid filter preserves stopped capture');
   await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await delay(200);
+  await waitFor("document.querySelectorAll('#packet-body tr').length>0", 'rows after clearing conversation filter');
   await evaluate("document.querySelector('#packet-body tr').click()");
   await waitFor("!document.getElementById('inspector').hidden && document.querySelectorAll('#fields button').length>0", 'mobile inspector');
   assert(await evaluate('document.documentElement.scrollWidth <= innerWidth + 2'), 'narrow layout does not overflow the page');

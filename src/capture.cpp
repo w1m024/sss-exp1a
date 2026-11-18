@@ -26,6 +26,16 @@ static std::string lower(std::string value) {
     for (char& c : value) c = char(std::tolower(static_cast<unsigned char>(c)));
     return value;
 }
+static std::string owners_json(const std::vector<ProcessOwner>& owners) {
+    std::string result = "[";
+    for (const auto& owner : owners) {
+        if (result.size() > 1) result += ',';
+        result += "{\"key\":" + json_string(owner.key()) + ",\"pid\":" + std::to_string(owner.pid)
+            + ",\"uid\":" + std::to_string(owner.uid) + ",\"name\":" + json_string(owner.name)
+            + ",\"start_ticks\":" + json_string(owner.start_ticks) + '}';
+    }
+    return result + ']';
+}
 static std::string endpoint(const std::string& address, uint16_t port) {
     return (address.find(':') != std::string::npos ? "[" + address + "]" : address)
         + ":" + std::to_string(port);
@@ -119,7 +129,7 @@ void Capture::start(const std::string& device, const std::string& filter, const 
         {
             std::lock_guard<std::mutex> lock(mutex_);
             datalink_ = int(ipc::get_u32(message.payload, 0));
-            packets_.clear(); active_flows_.clear();
+            packets_.clear(); active_flows_.clear(); process_tracker_.reset();
             bytes_ = 0; received_ = 0; evicted_ = 0;
             stats_supported_ = false; stats_received_ = dropped_ = interface_dropped_ = 0;
             device_ = device; filter_ = requested_filter; effective_filter_ = filter; error_.clear(); ++session_;
@@ -192,9 +202,14 @@ std::size_t Capture::memory_cost(const Packet& p) {
     for (const auto* s : {&p.source, &p.destination, &p.protocol, &p.summary, &p.network,
                           &p.transport, &p.tcp_flags, &p.http_line, &p.flow_id}) cost += s->capacity() + 32;
     for (const auto& f : p.fields) cost += f.section.capacity() + f.name.capacity() + f.value.capacity() + 96;
+    cost += p.processes.capacity() * sizeof(ProcessOwner);
+    for (const auto& owner : p.processes) cost += owner.name.capacity() + owner.start_ticks.capacity() + 64;
     return cost;
 }
 void Capture::add_packet(Packet packet) {
+    auto owners = packet.transport == "TCP" && !packet.fragmented && !packet.malformed
+        ? process_tracker_.lookup(packet.source, packet.source_port, packet.destination, packet.destination_port)
+        : std::vector<ProcessOwner>{};
     std::lock_guard<std::mutex> lock(mutex_);
     packet.id = next_id_++; ++received_;
     bool complete_tcp = std::any_of(packet.fields.begin(), packet.fields.end(),
@@ -224,6 +239,16 @@ void Capture::add_packet(Packet packet) {
             active_flows_[key] = f;
         }
         Flow& f = active_flows_.at(key);
+        bool new_owner = false;
+        for (const auto& owner : owners) {
+            bool known = false;
+            for (const auto& saved : f.processes) if (saved.key() == owner.key()) known = true;
+            if (!known && f.processes.size() < 32) { f.processes.push_back(owner); new_owner = true; }
+        }
+        packet.processes = f.processes;
+        if (new_owner) for (auto& saved : packets_) if (saved.flow_id == f.id) {
+            bytes_ -= memory_cost(saved); saved.processes = f.processes; bytes_ += memory_cost(saved);
+        }
         if (syn) {
             (direction_a ? f.have_syn_a : f.have_syn_b) = true;
             (direction_a ? f.syn_sequence_a : f.syn_sequence_b) = packet.tcp_sequence;
@@ -266,7 +291,16 @@ std::string Capture::packet_summary(const Packet& p) {
         << ",\"summary\":" << json_string(p.summary) << ",\"flow_id\":" << json_string(p.flow_id)
         << ",\"tcp_flags\":" << json_string(p.tcp_flags) << ",\"truncated\":" << (p.truncated ? "true" : "false")
         << ",\"malformed\":" << (p.malformed ? "true" : "false")
-        << ",\"fragmented\":" << (p.fragmented ? "true" : "false") << '}';
+        << ",\"fragmented\":" << (p.fragmented ? "true" : "false") << ",\"processes\":[";
+    bool first_owner = true;
+    for (const auto& owner : p.processes) {
+        if (!first_owner) out << ',';
+        first_owner = false;
+        out << "{\"key\":" << json_string(owner.key()) << ",\"pid\":" << owner.pid
+            << ",\"uid\":" << owner.uid << ",\"name\":" << json_string(owner.name)
+            << ",\"start_ticks\":" << json_string(owner.start_ticks) << '}';
+    }
+    out << "]}";
     return out.str();
 }
 namespace {
@@ -278,6 +312,10 @@ bool matches(const Packet& p, const std::string& protocol,
              const std::string& needle, const std::string& flow) {
     if (protocol != "ALL" && p.protocol != protocol && p.network != protocol && p.transport != protocol) return false;
     if (!flow.empty() && p.flow_id != flow) return false;
+    if (needle.rfind("process:", 0) == 0) {
+        for (const auto& owner : p.processes) if (owner.key() == needle.substr(8)) return true;
+        return false;
+    }
     return needle.empty() || lower(p.source + " " + p.destination + " " + p.summary + " " + p.protocol + " "
         + std::to_string(p.source_port) + " " + std::to_string(p.destination_port)).find(needle) != std::string::npos;
 }
@@ -377,7 +415,7 @@ std::string Capture::packet_json(uint64_t id) const {
     return result + "\"}";
 }
 std::string Capture::flows_json() const {
-    struct Summary { std::string a, b, state = "active"; uint64_t packets = 0, bytes = 0; int64_t start = 0, last = 0; bool fa = false, fb = false; };
+    struct Summary { std::string a, b, state = "active"; uint64_t packets = 0, bytes = 0; int64_t start = 0, last = 0; bool fa = false, fb = false; std::vector<ProcessOwner> owners; };
     std::map<std::string, Summary> flows;
     std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& p : packets_) {
@@ -386,6 +424,7 @@ std::string Capture::flows_json() const {
         auto s = endpoint(p.source, p.source_port), d = endpoint(p.destination, p.destination_port);
         if (!f.packets) { f.a = std::min(s, d); f.b = std::max(s, d); f.start = p.timestamp_us; }
         ++f.packets; f.bytes += p.wire_length; f.last = p.timestamp_us;
+        if (p.processes.size() > f.owners.size()) f.owners = p.processes;
         if (p.tcp_flag_bits & 1) (s == f.a ? f.fa : f.fb) = true;
         if (p.tcp_flag_bits & 4) f.state = "reset";
         else if (f.state != "reset" && f.fa && f.fb) f.state = "closed";
@@ -400,7 +439,8 @@ std::string Capture::flows_json() const {
         result += "{\"id\":" + json_string(item.first) + ",\"endpoint_a\":" + json_string(f.a)
             + ",\"endpoint_b\":" + json_string(f.b) + ",\"packets\":" + std::to_string(f.packets)
             + ",\"bytes\":" + std::to_string(f.bytes) + ",\"started_us\":" + std::to_string(f.start)
-            + ",\"last_us\":" + std::to_string(f.last) + ",\"state\":" + json_string(f.state) + '}';
+            + ",\"last_us\":" + std::to_string(f.last) + ",\"state\":" + json_string(f.state)
+            + ",\"processes\":" + owners_json(f.owners) + '}';
     }
     return result + "]}";
 }

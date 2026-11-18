@@ -32,6 +32,7 @@ private:
         uint32_t syn_sequence_a = 0, syn_sequence_b = 0;
         bool have_syn_a = false, have_syn_b = false;
         bool fin_a = false, fin_b = false, reset = false;
+        std::vector<ProcessOwner> processes;
     };
     void receive(int fd, pid_t pid);
     void add_packet(Packet packet);
@@ -53,6 +54,7 @@ private:
     uint32_t stats_received_ = 0, dropped_ = 0, interface_dropped_ = 0;
     std::deque<Packet> packets_;
     std::map<std::string, Flow> active_flows_;
+    ProcessTracker process_tracker_;
 };
 std::string interfaces_json();
 }

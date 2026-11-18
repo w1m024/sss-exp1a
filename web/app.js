@@ -403,7 +403,18 @@ import Split from './vendor/split.js';
       for (const flow of (data.flows || []).slice(-500).reverse()) {
         const button = el('button', `${flow.endpoint_a} ↔ ${flow.endpoint_b}`, 'flow-row'); button.type = 'button';
         button.append(el('small', `${number(flow.packets)} 包 · ${bytes(flow.bytes)} · ${flow.state || '—'} · ${time(flow.started_us)} → ${time(flow.last_us)}`));
-        button.addEventListener('click', () => { $('flows-dialog').close(); setFlow(flow.id, `${flow.endpoint_a} ↔ ${flow.endpoint_b}`); }); fragment.append(button);
+        button.addEventListener('click', () => { $('flows-dialog').close(); setFlow(flow.id, `${flow.endpoint_a} ↔ ${flow.endpoint_b}`); });
+        const entry = el('div'); entry.append(button);
+        if (!flow.processes?.length) entry.append(el('small', '进程未观测到：可能已退出、连接过短或无读取权限。', 'placeholder'));
+        for (const owner of flow.processes || []) {
+          const process = el('button', `${owner.name} · PID ${owner.pid} · 查看该进程的所有 TCP 会话`);
+          process.type = 'button'; process.style.margin = '3px 8px';
+          process.addEventListener('click', () => {
+            $('flows-dialog').close(); model.flow = ''; $('flow-filter').hidden = true;
+            model.search = `process:${owner.key}`; $('search').value = model.search; filterChanged();
+          }); entry.append(process);
+        }
+        fragment.append(entry);
       }
       if (!fragment.childNodes.length) fragment.append(el('p', '尚无 TCP 会话。', 'placeholder'));
       $('flows').replaceChildren(fragment);

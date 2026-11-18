@@ -53,6 +53,6 @@
     </div>
   </main>
   <footer class="statusbar" aria-label="捕获统计"><span><b id="retained">0</b> 个保留包</span><span>已接收 <b id="received">0</b></span><span>淘汰 <b id="evicted">0</b></span><span>内存 <b id="bytes">0 B</b></span><span>丢包 <b id="dropped">—</b></span><span id="status-note">本地捕获服务</span></footer>
-  <dialog id="flows-dialog" aria-labelledby="flows-title"><div class="dialog-head"><h2 id="flows-title">TCP 会话</h2><button id="close-flows" aria-label="关闭 TCP 会话" type="button">关闭 ×</button></div><p class="dialog-hint">选择会话筛选数据包 · 最近 500 个会话</p><div id="flows" class="flows"></div></dialog>
+  <dialog id="flows-dialog" aria-labelledby="flows-title"><div class="dialog-head"><h2 id="flows-title">TCP 会话</h2><button id="close-flows" aria-label="关闭 TCP 会话" type="button">关闭 ×</button></div><p class="dialog-hint">选择会话或进程筛选数据包 · 最近 500 个会话。进程关联仅限同一 WSL 中当前用户的 TCP 连接；快照可能漏掉极短连接，不包含 Windows 进程。</p><div id="flows" class="flows"></div></dialog>
 </body>
 </html>

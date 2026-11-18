@@ -1,4 +1,5 @@
 #pragma once
+#include "process.hpp"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -22,6 +23,7 @@ struct Packet {
     bool truncated = false, malformed = false, fragmented = false;
     std::vector<Field> fields;
     std::string flow_id;
+    std::vector<ProcessOwner> processes;
 };
 Packet decode_packet(std::vector<uint8_t> bytes, int datalink,
                      int64_t timestamp_us, uint32_t wire_length);
