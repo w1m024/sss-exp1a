@@ -19,6 +19,7 @@ struct Packet {
     std::string network, transport, tcp_flags, http_line;
     uint16_t source_port = 0, destination_port = 0;
     uint32_t tcp_sequence = 0, tcp_ack = 0;
+    std::size_t tcp_payload_offset = 0, tcp_payload_size = 0;
     uint8_t tcp_flag_bits = 0;
     bool truncated = false, malformed = false, fragmented = false;
     std::vector<Field> fields;

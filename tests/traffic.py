@@ -1,6 +1,7 @@
 """Bounded local HTTP fixture for the browser test, executed inside WSL."""
 import socket
 import threading
+import time
 
 with socket.socket() as listener:
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -15,6 +16,7 @@ with socket.socket() as listener:
             with connection:
                 connection.settimeout(3)
                 connection.recv(4096)
+                time.sleep(0.15)  # Keep the socket observable by the PID snapshot.
                 connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntest")
 
     worker = threading.Thread(target=serve)

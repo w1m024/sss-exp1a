@@ -151,6 +151,12 @@ int main(int argc, char **argv) {
             } catch (const std::exception& error) { failure(res, 422, error.what()); }
         });
         server.Get("/api/flows", json_route([&](const auto&) { return capture.flows_json(); }));
+        server.Get("/api/flows/http", json_route([&](const auto& req) {
+            const auto flow = req.get_param_value("flow");
+            if (flow.size() < 5 || flow.size() > 24 || flow.compare(0, 4, "tcp-") ||
+                flow.find_first_not_of("0123456789", 4) != std::string::npos) throw std::invalid_argument("Invalid TCP flow");
+            return capture.http_exchanges_json(flow);
+        }));
         server.Get("/api/export", [&](const auto&, auto& res) {
             res.set_header("Content-Disposition", "attachment; filename=wirelens.pcap");
             res.set_content(capture.export_pcap(), "application/vnd.tcpdump.pcap");

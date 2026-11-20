@@ -24,6 +24,7 @@ public:
                               const std::string& search, const std::string& flow, std::size_t bins) const;
     std::string packet_json(uint64_t id) const;
     std::string flows_json() const;
+    std::string http_exchanges_json(const std::string& flow) const;
     std::string export_pcap() const;
 private:
     struct Flow {

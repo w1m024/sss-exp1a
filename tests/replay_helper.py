@@ -26,19 +26,19 @@ def message(kind, payload):
     write(struct.pack("!III", MAGIC, kind, len(payload)) + payload)
 
 
-def ethernet_tcp(sequence=100, flags=0x10, reverse=False, fragment=0):
+def ethernet_tcp(sequence=100, flags=0x10, reverse=False, fragment=0, body=b'', ack=50):
     """Deterministic Ethernet / IPv4 / TCP with valid IPv4 checksum."""
     a, b = b"\xc0\x00\x02\x01", b"\xc6\x33\x64\x02"
     sport, dport = 12345, 8081
     if reverse:
         a, b, sport, dport = b, a, dport, sport
-    tcp = struct.pack("!HHIIBBHHH", sport, dport, sequence, 50, 0x50, flags, 4096, 0, 0)
-    ip = bytearray(struct.pack("!BBHHHBBH4s4s", 0x45, 0, 40, 1, fragment, 64, 6, 0, a, b))
+    tcp = struct.pack("!HHIIBBHHH", sport, dport, sequence, ack, 0x50, flags, 4096, 0, 0)
+    ip = bytearray(struct.pack("!BBHHHBBH4s4s", 0x45, 0, 40 + len(body), 1, fragment, 64, 6, 0, a, b))
     checksum = sum(struct.unpack("!10H", ip))
     while checksum >> 16:
         checksum = (checksum & 65535) + (checksum >> 16)
     struct.pack_into("!H", ip, 10, checksum ^ 65535)
-    return bytes.fromhex("00112233445566778899aabb0800") + ip + tcp
+    return bytes.fromhex("00112233445566778899aabb0800") + ip + tcp + body
 
 
 def packet(data, index, wire_length=None):

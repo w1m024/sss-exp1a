@@ -25,6 +25,31 @@ BASE = 1700000000000000
 
 
 def fixtures(mode):
+    if mode.startswith('http-'):
+        request = b'GET /index HTTP/1.1\r\nHost: local.test\r\n\r\nHEAD /next HTTP/1.1\r\n\r\n'
+        response = b'HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntestHTTP/1.1 200 OK\r\nContent-Length: 99\r\n\r\n'
+        if mode in ('http-chunked', 'http-bad-chunk', 'http-short-chunk'):
+            chunk = {'http-chunked': b'4;part=1\r\ntest\r\n0\r\nX-End: yes\r\n\r\n',
+                     'http-bad-chunk': b'Z\r\ntest\r\n',
+                     'http-short-chunk': b'4\r\nte'}[mode]
+            response = b'HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n' + chunk
+            if mode == 'http-chunked':
+                response += b'HTTP/1.1 200 OK\r\nContent-Length: 99\r\n\r\n'
+        if mode == 'http-unsupported':
+            response = b'HTTP/1.1 200 OK\r\n\r\nclose-delimited'
+        if mode == 'http-limit':
+            response = b'HTTP/1.1 200 OK\r\nX-Long: ' + b'x' * 33000
+        frames = [ethernet_tcp(100, 2), ethernet_tcp(200, 18, True, ack=101),
+                  ethernet_tcp(108, body=request[7:])]
+        if mode != 'http-gap':
+            frames += [ethernet_tcp(101, body=request[:7]), ethernet_tcp(101, body=request[:7])]
+        if mode == 'http-conflict':
+            frames.append(ethernet_tcp(101, body=b'X'))
+        step = 8192 if mode == 'http-limit' else 18
+        frames += [ethernet_tcp(201 + i, reverse=True, body=response[i:i+step])
+                   for i in range(0, len(response), step)]
+        return [(BASE + i * 1000, len(frame) + (1 if mode == 'http-truncated' and i == len(frames)-1 else 0), frame)
+                for i, frame in enumerate(frames)]
     if mode == "empty":
         return []
     if mode == "single":
@@ -188,6 +213,35 @@ def run(s):
                        {"search": "x" * 257}, {"flow": "x" * 65}):
             s.request(route + "?" + urllib.parse.urlencode(params), expected=422)
     print("PASS timeline boundaries, conservation, wire bytes, >1000 packets, filters, pagination, gap, auth and validation")
+    failure_states = {'http-gap': 'missing_segments', 'http-conflict': 'conflicting_overlap',
+                      'http-bad-chunk': 'invalid_framing', 'http-short-chunk': 'incomplete_message',
+                      'http-unsupported': 'unsupported_framing', 'http-limit': 'analysis_limit',
+                      'http-truncated': 'truncated_capture'}
+    for mode in ('http-complete', 'http-chunked', *failure_states):
+        s.replay(mode)
+        flow = s.request('/flows')['flows'][0]['id']
+        result = s.get('/flows/http', flow=flow)
+        if mode in ('http-complete', 'http-chunked'):
+            require(result['state'] == 'complete', result)
+            exchanges = result['exchanges']
+            require([e['request'] for e in exchanges] == ['GET /index HTTP/1.1', 'HEAD /next HTTP/1.1'], result)
+            require(all(e['response'] == 'HTTP/1.1 200 OK' for e in exchanges), result)
+            packet = s.request('/packets/' + str(exchanges[0]['request_packet']))
+            require(bytes.fromhex(packet['hex']).endswith(b'GET /in'), 'first request byte provenance')
+            require(exchanges[0]['elapsed_us'] == 2000, result)
+            require(exchanges[0]['target'] == '/index' and exchanges[0]['status'] == 200, result)
+            require(exchanges[0]['request_details']['headers'] == 'Host: local.test', result)
+            require(exchanges[0]['response_details']['body_bytes'] == 4, result)
+            require(exchanges[1]['response_details']['body_bytes'] == 0, result)
+            require(exchanges[0]['response_complete_us'] > exchanges[0]['response_us'], result)
+            require(exchanges[0]['response_last_packet'] != exchanges[0]['response_packet'], result)
+            expected = 'chunked' if mode == 'http-chunked' else 'content-length'
+            require(exchanges[0]['response_details']['framing'] == expected, result)
+        else:
+            require(result['state'] == failure_states[mode], result)
+            if mode != 'http-truncated':
+                require(result['exchanges'] == [], result)
+    print('PASS HTTP reassembly, out-of-order segments, retransmission, gap, conflicting overlap, fixed body, HEAD and packet provenance')
 
 
 def main():

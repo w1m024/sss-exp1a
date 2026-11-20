@@ -4,6 +4,23 @@ import Split from './vendor/split.js';
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
+  const interfaces = new Map();
+  function updateInterfaceDetails() {
+    const item = interfaces.get($('interface').value);
+    $('interface-details-button').disabled = !item;
+    const panel = $('interface-details');
+    panel.replaceChildren();
+    if (!item) return;
+    panel.append(el('strong', item.name));
+    if (item.description && item.description !== item.name) panel.append(el('p', item.description));
+    if (!item.addresses?.length) {
+      panel.append(el('p', item.name === 'any' ? 'Captures across interfaces visible to libpcap.' : 'No IP addresses listed.'));
+      return;
+    }
+    const addresses = el('ul');
+    for (const address of item.addresses) addresses.append(el('li', address));
+    panel.append(addresses);
+  }
   const LIMIT = 1000;
   const model = { token: '', ready: false, state: 'idle', session: undefined, cursor: 0,
     epoch: 0, packets: new Map(), selected: null, detail: null, detailSeq: 0,
@@ -39,7 +56,7 @@ import Split from './vendor/split.js';
       gutter: () => {
         const node = document.createElement('div'); node.className = 'gutter gutter-horizontal';
         node.tabIndex = 0; node.setAttribute('role', 'separator');
-        node.setAttribute('aria-label', '调整列表与详情宽度'); node.setAttribute('aria-orientation', 'vertical');
+        node.setAttribute('aria-label', 'Resize packet list and details'); node.setAttribute('aria-orientation', 'vertical');
         node.setAttribute('aria-valuemin', '30'); node.setAttribute('aria-valuemax', '75');
         node.setAttribute('aria-valuenow', String(Math.round(savedSizes[0])));
         node.addEventListener('keydown', event => {
@@ -80,7 +97,7 @@ import Split from './vendor/split.js';
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('flows-dialog').open && inspectorOpen) { closeInspector(); model.packets.get(model.selected)?.row.focus(); } });
   desktop.addEventListener('change', configureSplit);
   const timeline = createTimeline(range => { model.timeRange = range; filterChanged(); });
-  const number = value => Number(value || 0).toLocaleString('zh-CN');
+  const number = value => Number(value || 0).toLocaleString('en-US');
   const bytes = value => { const n = Number(value || 0); return n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1048576).toFixed(1)} MiB`; };
   function el(tag, text, className) {
     const node = document.createElement(tag);
@@ -96,7 +113,7 @@ import Split from './vendor/split.js';
       const response = await fetch(`/api${path}`, { ...options, cache: 'no-store', signal: controller.signal,
         headers: { ...(model.token ? { 'X-Capture-Token': model.token } : {}), ...options.headers } });
       if (!response.ok) {
-        let reason = `请求失败（${response.status}）`;
+        let reason = `Request failed (${response.status})`;
         try { const body = await response.json(); if (body.error) reason = String(body.error); } catch { /* Preserve HTTP status. */ }
         const error = new Error(reason); error.status = response.status; throw error;
       }
@@ -114,10 +131,10 @@ import Split from './vendor/split.js';
   function clearDetail() {
     closeInspector(); detailTab('fields');
     model.detailSeq++; model.selected = null; model.detail = null;
-    $('fields').replaceChildren(el('p', '选择数据包，查看协议字段。', 'placeholder'));
-    $('hex').replaceChildren(el('p', '等待选择数据包。', 'placeholder'));
+    $('fields').replaceChildren(el('p', 'Select a packet to view its details.', 'placeholder'));
+    $('hex').replaceChildren(el('p', 'Select a packet to view its bytes.', 'placeholder'));
     $('detail-id').textContent = '—'; $('detail-warning').hidden = true;
-    $('byte-range').textContent = '选择字段可定位对应字节'; $('follow').disabled = true;
+    $('byte-range').textContent = 'Select a field to highlight its bytes'; $('follow').disabled = true;
   }
   function resetPackets() {
     model.epoch++; model.cursor = model.clearAfter; model.packets.clear();
@@ -126,15 +143,16 @@ import Split from './vendor/split.js';
   }
   function updateCount() {
 
-    $('visible-count').textContent = `${number(model.packets.size)} 条`;
+    $('visible-count').textContent = `${number(model.packets.size)} packets`;
     $('empty').hidden = model.packets.size > 0;
     if (!model.packets.size) {
       const filtered = model.protocol !== 'ALL' || model.search || model.flow || model.timeRange;
-      $('empty').firstElementChild.textContent = filtered ? '没有匹配的数据包' : model.state === 'running' ? '正在记录网络活动…' : '尚无数据包';
-      $('empty').querySelector('p').textContent = filtered ? '调整协议、搜索词或会话筛选。' : model.state === 'running' ? '捕获已开始，等待数据包到达。' : '选择网络接口，开始捕获数据包。';
+      $('empty').firstElementChild.textContent = filtered ? 'No matching packets' : model.state === 'running' ? 'Recording network activity…' : 'No packets recorded';
+      $('empty').querySelector('p').textContent = filtered ? 'Adjust the protocol, text, stream, or time filters.' : model.state === 'running' ? 'Recording started. Waiting for packets.' : 'Select an interface and start recording.';
     }
   }
   function status(data) {
+    const firstStatus = model.session === undefined;
     if (model.session !== undefined && model.session !== data.session) {
       model.clearAfter = 0; model.filterInvalid = false; model.timeRange = null; model.timelineKey = ''; timeline.reset();
       model.flow = ''; $('flow-filter').hidden = true;
@@ -142,14 +160,17 @@ import Split from './vendor/split.js';
       $('flows-dialog').close();
     }
     model.session = data.session; model.state = data.state; model.latestId = Number(data.latest_id) || 0;
-    const names = { idle: '就绪', running: '捕获中', stopped: '已停止', error: '捕获错误' };
-    $('state').textContent = names[data.state] || '未知状态'; $('state').dataset.state = data.state;
+    const names = { idle: 'Ready', running: 'Recording', stopped: 'Stopped', error: 'Capture error' };
+    $('state').textContent = names[data.state] || 'Unknown state'; $('state').dataset.state = data.state;
     for (const key of ['retained', 'received', 'evicted']) $(key).textContent = number(data[key]);
     $('bytes').textContent = bytes(data.bytes);
-    $('dropped').textContent = data.stats?.supported ? `${number(data.stats.dropped)} / 接口 ${data.stats.interface_dropped == null ? '未提供' : number(data.stats.interface_dropped)}` : '未提供';
-    $('status-note').textContent = data.interface ? `${data.interface} · ${data.effective_filter || data.filter || '未设置捕获过滤器'}` : '本地捕获服务';
+    $('dropped').textContent = data.stats?.supported ? `${number(data.stats.dropped)} / Interface ${data.stats.interface_dropped == null ? 'N/A' : number(data.stats.interface_dropped)}` : 'N/A';
+    $('status-note').textContent = data.interface ? `${data.interface} · ${data.effective_filter || data.filter || 'No capture filter'}` : 'Local capture service';
     if (data.error) message(String(data.error));
-    if (data.interface && [...$('interface').options].some(o => o.value === data.interface)) $('interface').value = data.interface;
+    if ((data.state === 'running' || firstStatus) && interfaces.has(data.interface) && $('interface').value !== data.interface) {
+      $('interface').value = data.interface;
+      updateInterfaceDetails();
+    }
     if (data.state === 'running') $('bpf').value = data.filter || '';
     prune(data.oldest_id); controls(); updateCount();
   }
@@ -163,7 +184,7 @@ import Split from './vendor/split.js';
   function time(us) {
     const date = new Date(Number(us) / 1000);
     if (!Number.isFinite(date.getTime())) return '—';
-    return `${date.toLocaleTimeString('zh-CN', { hour12: false })}.${String(Math.abs(Number(us)) % 1000000).padStart(6, '0')}`;
+    return `${date.toLocaleTimeString('en-GB', { hour12: false })}.${String(Math.abs(Number(us)) % 1000000).padStart(6, '0')}`;
   }
   function endpoint(address, port) {
     const host = address || '—';
@@ -175,7 +196,7 @@ import Split from './vendor/split.js';
     row.classList.toggle('packet-error', Boolean(packet.malformed));
     row.classList.toggle('packet-warning', Boolean(packet.truncated || packet.fragmented));
     row.setAttribute('aria-selected', 'false');
-    row.setAttribute('aria-label', `数据包 ${packet.id}，${packet.protocol}，${packet.source} 到 ${packet.destination}，${packet.summary}`);
+    row.setAttribute('aria-label', `Packet ${packet.id}, ${packet.protocol}, ${packet.source} to ${packet.destination}, ${packet.summary}`);
     const id = el('td', packet.id, 'numeric');
     const stamp = el('td', time(packet.timestamp_us));
     const source = el('td', endpoint(packet.source, packet.ports_known ? packet.source_port : null)); source.title = source.textContent;
@@ -184,7 +205,7 @@ import Split from './vendor/split.js';
     const length = el('td', number(packet.length), 'numeric');
     let summaryText = String(packet.summary || '').replace(` ${packet.source} -> ${packet.destination}`, '');
     if (summaryText === packet.protocol && packet.tcp_flags) summaryText = packet.tcp_flags;
-    const summary = el('td', `${packet.truncated ? '[截断] ' : ''}${packet.malformed ? '[异常] ' : ''}${packet.fragmented ? '[分片] ' : ''}${summaryText}`);
+    const summary = el('td', `${packet.truncated ? '[Truncated] ' : ''}${packet.malformed ? '[Malformed] ' : ''}${packet.fragmented ? '[Fragmented] ' : ''}${summaryText}`);
     summary.title = summary.textContent; row.append(id, stamp, source, destination, protocol, length, summary); return row;
   }
   const sortKeys = ['id', 'timestamp_us', 'source', 'destination', 'protocol', 'length', 'summary'];
@@ -204,7 +225,7 @@ import Split from './vendor/split.js';
     document.querySelectorAll('.packet-table th').forEach((th, index) => th.setAttribute('aria-sort', sortKeys[index] === model.sortKey ? model.sortDirection === 1 ? 'ascending' : 'descending' : 'none'));
   }
   document.querySelectorAll('.packet-table th').forEach((th, index) => {
-    const button = el('button', th.textContent); button.type = 'button'; button.title = `按${th.textContent}排序`;
+    const button = el('button', th.textContent); button.type = 'button'; button.title = `Sort by ${th.textContent}`;
     th.replaceChildren(button); th.setAttribute('aria-sort', index === 0 ? 'ascending' : 'none');
     button.addEventListener('click', () => { model.sortDirection = model.sortKey === sortKeys[index] ? -model.sortDirection : 1; model.sortKey = sortKeys[index]; sortRows(); });
   });
@@ -224,7 +245,7 @@ import Split from './vendor/split.js';
       if (atBottom && model.selected === null) scroll.scrollTop = scroll.scrollHeight;
       updateCount();
     }
-    if (data.gap) { $('gap').hidden = false; $('gap').textContent = '部分旧包已被淘汰；当前列表已从服务端仍保留的数据继续更新。'; }
+    if (data.gap) { $('gap').hidden = false; $('gap').textContent = 'Older packets were evicted. The list now continues from the earliest retained packet.'; }
     model.cursor = data.cursor ?? model.cursor;
   }
   async function poll() {
@@ -249,10 +270,10 @@ import Split from './vendor/split.js';
       model.connectionError = false;
     } catch (error) {
       if (error.status === 400 || error.status === 422) {
-        model.filterInvalid = true; message(`显示过滤条件无效：${error.message}。修改条件后继续刷新。`); return;
+        model.filterInvalid = true; message(`Invalid display filter: ${error.message}. Edit the filter to resume updates.`); return;
       }
-      model.failures++; model.connectionError = true; message(`连接异常：${error.message}${model.failures >= 2 ? '。连续两次失败，已暂停自动刷新；重新加载页面可重连。' : '。将在下一轮重试一次。'}`);
-      if (model.failures >= 2) { clearInterval(model.timer); model.ready = false; $('state').textContent = '连接中断'; $('state').dataset.state = 'error'; controls(); }
+      model.failures++; model.connectionError = true; message(`Connection error: ${error.message}${model.failures >= 2 ? '. Updates paused after two failures. Reload to reconnect.' : '. Retrying once on the next update.'}`);
+      if (model.failures >= 2) { clearInterval(model.timer); model.ready = false; $('state').textContent = 'Disconnected'; $('state').dataset.state = 'error'; controls(); }
     } finally { model.polling = false; }
   }
   function filterChanged() {
@@ -261,8 +282,8 @@ import Split from './vendor/split.js';
   }
   const protocolFragment = document.createDocumentFragment();
   for (const protocol of ['ALL', 'HTTP', 'DNS', 'TCP', 'UDP', 'IPv4', 'IPv6', 'ICMP', 'ICMPv6']) {
-    const button = el('button', protocol); button.type = 'button'; button.setAttribute('aria-pressed', String(protocol === 'ALL'));
-    button.setAttribute('aria-label', protocol === 'ALL' ? '显示所有协议' : `筛选 ${protocol} 协议`);
+    const button = el('button', protocol === 'ALL' ? 'All' : protocol); button.type = 'button'; button.setAttribute('aria-pressed', String(protocol === 'ALL'));
+    button.setAttribute('aria-label', protocol === 'ALL' ? 'Show all protocols' : `Filter ${protocol} packets`);
     button.addEventListener('click', () => {
       if (model.protocol === protocol) return;
       model.protocol = protocol;
@@ -277,7 +298,7 @@ import Split from './vendor/split.js';
     clearTimeout(searchTimer);
     if (new TextEncoder().encode(value).length > 256) {
       searchInvalid = true; $('search').setAttribute('aria-invalid', 'true');
-      message('搜索内容最多 256 个 UTF-8 字节，当前仍显示上一次有效条件的结果。'); return;
+      message('Filter text is limited to 256 UTF-8 bytes. Showing results for the last valid filter.'); return;
     }
     if (searchInvalid) { searchInvalid = false; message(''); }
     $('search').removeAttribute('aria-invalid');
@@ -293,21 +314,21 @@ import Split from './vendor/split.js';
       node.classList.toggle('highlight', index >= offset && index < offset + length);
       node.classList.toggle('highlight-start', index === offset && length > 0);
     }
-    $('byte-range').textContent = length > 0 ? `字节 ${offset}–${offset + length - 1} · ${length} B` : '此字段没有可定位的字节';
+    $('byte-range').textContent = length > 0 ? `Bytes ${offset}–${offset + length - 1} · ${length} B` : 'No byte range is available for this field';
     $('hex').querySelector('.highlight')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
   function renderDetail(packet) {
     $('detail-id').textContent = `#${packet.id}`;
     const warnings = [];
-    if (packet.truncated) warnings.push(`数据包已截断：捕获 ${packet.caplen} / 原始 ${packet.length} 字节`);
-    if (packet.malformed) warnings.push('协议解析异常');
-    if (packet.fragmented) warnings.push('IP 分片，内容可能不完整');
-    $('detail-warning').textContent = warnings.join('；'); $('detail-warning').hidden = !warnings.length;
+    if (packet.truncated) warnings.push(`Packet truncated: captured ${packet.caplen} / original ${packet.length} bytes`);
+    if (packet.malformed) warnings.push('Malformed packet');
+    if (packet.fragmented) warnings.push('IP fragment; contents may be incomplete');
+    $('detail-warning').textContent = warnings.join('; '); $('detail-warning').hidden = !warnings.length;
     const groups = new Map(); const fragment = document.createDocumentFragment();
     const hexString = String(packet.hex || '');
     const octets = /^[0-9a-f]*$/i.test(hexString) && hexString.length % 2 === 0 ? hexString.match(/../g) || [] : [];
     for (const field of packet.fields || []) {
-      const section = String(field.section || '其他字段');
+      const section = String(field.section || 'Other fields');
       if (!groups.has(section)) { const group = el('details'); group.open = true; group.append(el('summary', section)); groups.set(section, group); fragment.append(group); }
       const button = el('button', field.name, 'field'); button.type = 'button'; button.append(el('span', field.value)); button.setAttribute('aria-pressed', 'false');
       const offset = Math.max(0, Math.min(octets.length, Number(field.offset) || 0));
@@ -315,7 +336,7 @@ import Split from './vendor/split.js';
       button.addEventListener('click', () => highlight(offset, length, button)); groups.get(section).append(button);
     }
     if (packet.http_line) fragment.append(el('p', packet.http_line, 'placeholder mono'));
-    if (!fragment.childNodes.length) fragment.append(el('p', '没有可解析的协议字段。', 'placeholder'));
+    if (!fragment.childNodes.length) fragment.append(el('p', 'No decoded fields available.', 'placeholder'));
     $('fields').replaceChildren(fragment);
     const hexFragment = document.createDocumentFragment();
     for (let offset = 0; offset < octets.length; offset += 16) {
@@ -329,25 +350,25 @@ import Split from './vendor/split.js';
       }
       row.append(hex, ascii); hexFragment.append(row);
     }
-    if (!octets.length) hexFragment.append(el('p', '无可用字节数据。', 'placeholder'));
-    $('hex').replaceChildren(hexFragment); $('byte-range').textContent = `${number(octets.length)} 字节 · 选择字段可定位`;
+    if (!octets.length) hexFragment.append(el('p', 'No bytes available.', 'placeholder'));
+    $('hex').replaceChildren(hexFragment); $('byte-range').textContent = `${number(octets.length)} bytes · Select a field to highlight its bytes`;
     $('follow').disabled = !packet.flow_id || !(packet.transport === 'TCP' || packet.protocol === 'TCP' || packet.protocol === 'HTTP');
   }
   async function selectPacket(id, focus = false) {
-    id = String(id); const entry = model.packets.get(id); if (!entry) return;
+    id = String(id); const entry = model.packets.get(id);
     model.selected = id; model.detail = null; const sequence = ++model.detailSeq;
     openInspector();
     for (const [key, value] of model.packets) { value.row.setAttribute('aria-selected', String(key === id)); value.row.tabIndex = key === id ? 0 : -1; }
-    if (focus) { entry.row.focus({ preventScroll: true }); entry.row.scrollIntoView({ block: 'nearest' }); }
+    if (focus && entry) { entry.row.focus({ preventScroll: true }); entry.row.scrollIntoView({ block: 'nearest' }); }
     $('detail-id').textContent = `#${id}`; $('follow').disabled = true; $('detail-warning').hidden = true;
-    $('fields').replaceChildren(el('p', '正在读取协议详情…', 'placeholder'));
-    $('hex').replaceChildren(); $('byte-range').textContent = '正在读取字节…';
+    $('fields').replaceChildren(el('p', 'Loading packet details…', 'placeholder'));
+    $('hex').replaceChildren(); $('byte-range').textContent = 'Loading bytes…';
     try {
       const packet = await api(`/packets/${encodeURIComponent(id)}`);
       if (sequence !== model.detailSeq) return;
       model.detail = packet; renderDetail(packet);
     } catch (error) {
-      if (sequence === model.detailSeq) $('fields').replaceChildren(el('p', `无法读取数据包：${error.message}。该包可能已被淘汰，请选择其他数据包。`, 'placeholder'));
+      if (sequence === model.detailSeq) $('fields').replaceChildren(el('p', `Could not load packet: ${error.message}. The packet may have been evicted. Select another packet.`, 'placeholder'));
     }
   }
   $('packet-body').addEventListener('click', event => { const row = event.target.closest('tr'); if (row) void selectPacket(row.dataset.id, true); });
@@ -369,7 +390,7 @@ import Split from './vendor/split.js';
     try { await work(); } catch (error) { message(error.message); }
     finally { model.busy = false; controls(); }
   }
-  $('interface').addEventListener('change', controls);
+  $('interface').addEventListener('change', () => { controls(); updateInterfaceDetails(); });
   $('clear-view').addEventListener('click', () => {
     model.clearAfter = Math.max(model.clearAfter, model.latestId, model.cursor, ...[...model.packets.keys()].map(Number));
     model.timeRange = null; model.timelineKey = ''; timeline.reset();
@@ -388,27 +409,129 @@ import Split from './vendor/split.js';
     const link = el('a'); link.href = url; link.download = `capture-${new Date().toISOString().replace(/[:.]/g, '-')}.pcap`;
     document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   }));
-  function setFlow(id, label) { model.flow = String(id || ''); $('flow-filter').hidden = !model.flow; $('flow-label').textContent = label || `TCP 会话 ${model.flow}`; filterChanged(); }
+  function setFlow(id, label) { model.flow = String(id || ''); $('flow-filter').hidden = !model.flow; $('flow-label').textContent = label || `TCP stream ${model.flow}`; filterChanged(); }
   $('follow').addEventListener('click', () => { if (model.detail?.flow_id) setFlow(model.detail.flow_id); });
   $('clear-flow').addEventListener('click', () => setFlow(''));
   $('close-flows').addEventListener('click', () => $('flows-dialog').close());
+  function renderHttpAnalysis(output, data) {
+    const states = {
+      complete: 'All retained HTTP messages in this stream were paired.',
+      no_messages: 'No captured application data.',
+      missing_handshake: 'The TCP handshake was not captured or is no longer retained.',
+      uncertain_direction: 'Could not determine the client direction.',
+      missing_segments: 'TCP sequence gap. Analysis stopped before the missing bytes.',
+      conflicting_overlap: 'Overlapping TCP segments contain different bytes.',
+      truncated_capture: 'One or more packets were truncated during capture.',
+      analysis_limit: 'Analysis limit reached.',
+      invalid_framing: 'Invalid or unrecognized HTTP message framing.',
+      unsupported_framing: 'Unsupported framing, tunnel, or protocol upgrade.',
+      incomplete_message: 'The next request or response is incomplete.',
+    };
+    output.replaceChildren(el('p', states[data.state] || 'Analysis unavailable.', 'placeholder'));
+    const exchanges = data.exchanges;
+    if (!exchanges.length) return;
+    const validTiming = exchange => exchange.response_us >= exchange.request_us &&
+      exchange.response_complete_us >= exchange.response_us;
+    const timed = exchanges.filter(validTiming);
+    const origin = Math.min(...timed.map(exchange => exchange.request_us));
+    const end = Math.max(...timed.map(exchange => exchange.response_complete_us));
+    const duration = Math.max(1, end - origin);
+    const list = el('div', undefined, 'http-exchanges');
+    list.setAttribute('role', 'group');
+    list.setAttribute('aria-label', 'HTTP exchanges');
+    const details = el('div', undefined, 'http-exchange-details');
+    const buttons = [];
+    const ms = us => `${(us / 1000).toFixed(3)} ms`;
+    function show(exchange, selected) {
+      for (const button of buttons) button.setAttribute('aria-pressed', String(button === selected));
+      details.replaceChildren();
+      for (const [label, line, id, meta] of [
+        ['Request', exchange.request, exchange.request_packet, exchange.request_details],
+        ['Response', exchange.response, exchange.response_packet, exchange.response_details],
+      ]) {
+        const section = el('details');
+        section.open = true;
+        section.append(el('summary', `${label} · ${meta.body_bytes} body bytes · ${meta.framing}`));
+        const jump = el('button', `#${id} ${line}`, 'http-packet-link');
+        jump.type = 'button';
+        jump.addEventListener('click', () => { $('flows-dialog').close(); void selectPacket(id, true); });
+        section.append(jump, el('pre', meta.headers || 'No headers'));
+        details.append(section);
+      }
+      if (exchange.response_last_packet !== exchange.response_packet) {
+        const id = exchange.response_last_packet;
+        const jump = el('button', `Last response byte · #${id}`, 'http-packet-link');
+        jump.type = 'button';
+        jump.addEventListener('click', () => { $('flows-dialog').close(); void selectPacket(id, true); });
+        details.append(jump);
+      }
+      if (validTiming(exchange)) {
+        details.append(el('p', `First response byte: ${ms(exchange.response_us - exchange.request_us)} · Response completion: ${ms(exchange.response_complete_us - exchange.response_us)}`));
+      } else details.append(el('p', 'Timing unavailable: capture timestamps are out of order.'));
+    }
+    for (const exchange of exchanges) {
+      const row = el('button', undefined, 'http-exchange-row');
+      row.type = 'button';
+      const label = el('span', `${exchange.method} ${exchange.target}`);
+      label.title = label.textContent;
+      row.append(label, el('span', exchange.status));
+      const track = el('span', undefined, 'http-waterfall');
+      if (validTiming(exchange)) {
+        for (const [start, finish, style] of [
+          [exchange.request_us, exchange.response_us, 'http-wait'],
+          [exchange.response_us, exchange.response_complete_us, 'http-receive'],
+        ]) {
+          const bar = el('span', undefined, style);
+          bar.style.left = `${100 * (start - origin) / duration}%`;
+          bar.style.width = `${100 * (finish - start) / duration}%`;
+          track.append(bar);
+        }
+        track.title = `${ms(exchange.response_complete_us - exchange.request_us)} from request to response completion`;
+      } else track.textContent = '—';
+      row.append(track);
+      row.addEventListener('click', () => show(exchange, row));
+      buttons.push(row);
+      list.append(row);
+    }
+    const legend = timed.length
+      ? `Capture timeline · 0–${ms(end - origin)} · Blue: request to response · Green: response completion`
+      : 'Capture timing unavailable';
+    output.append(el('p', legend, 'placeholder'), list, details);
+    show(exchanges[0], buttons[0]);
+  }
+
   let flowsBusy = false;
   $('flows-button').addEventListener('click', async () => {
     if (flowsBusy || !model.ready) return; flowsBusy = true; $('flows-button').disabled = true;
-    $('flows-dialog').showModal(); $('flows').replaceChildren(el('p', '正在读取会话…', 'placeholder'));
+    $('flows-dialog').showModal(); $('flows').replaceChildren(el('p', 'Loading streams…', 'placeholder'));
     const epoch = model.epoch;
     try {
       const data = await api('/flows'); const fragment = document.createDocumentFragment();
-      if (epoch !== model.epoch) { $('flows').replaceChildren(el('p', '捕获上下文已改变，请关闭后重新打开会话列表。', 'placeholder')); return; }
+      if (epoch !== model.epoch) { $('flows').replaceChildren(el('p', 'The capture has changed. Close and reopen the stream list.', 'placeholder')); return; }
       for (const flow of (data.flows || []).slice(-500).reverse()) {
         const button = el('button', `${flow.endpoint_a} ↔ ${flow.endpoint_b}`, 'flow-row'); button.type = 'button';
-        button.append(el('small', `${number(flow.packets)} 包 · ${bytes(flow.bytes)} · ${flow.state || '—'} · ${time(flow.started_us)} → ${time(flow.last_us)}`));
+        button.append(el('small', `${number(flow.packets)} packets · ${bytes(flow.bytes)} · ${flow.state || '—'} · ${time(flow.started_us)} → ${time(flow.last_us)}`));
         button.addEventListener('click', () => { $('flows-dialog').close(); setFlow(flow.id, `${flow.endpoint_a} ↔ ${flow.endpoint_b}`); });
         const entry = el('div'); entry.append(button);
-        if (!flow.processes?.length) entry.append(el('small', '进程未观测到：可能已退出、连接过短或无读取权限。', 'placeholder'));
+        const analysis = el('button', 'Analyze HTTP'); analysis.type = 'button';
+        const output = el('div'); output.setAttribute('aria-live', 'polite');
+        entry.append(analysis, output);
+        analysis.addEventListener('click', async () => {
+          const session = model.session;
+          analysis.disabled = true;
+          output.textContent = 'Reassembling retained TCP packets…';
+          try {
+            const data = await api(`/flows/http?flow=${encodeURIComponent(flow.id)}`);
+            if (session !== model.session) { output.textContent = 'Capture changed. Reopen TCP streams.'; return; }
+            renderHttpAnalysis(output, data);
+          } catch (error) { output.textContent = `Could not analyze HTTP: ${error.message}`; }
+          finally { analysis.disabled = false; }
+        });
+        if (!flow.processes?.length) entry.append(el('small', 'Process unavailable: it may have exited, the connection was too short, or access was denied.', 'placeholder'));
         for (const owner of flow.processes || []) {
-          const process = el('button', `${owner.name} · PID ${owner.pid} · 查看该进程的所有 TCP 会话`);
+          const process = el('button', `${owner.name} · PID ${owner.pid} · Show all TCP streams for this process`);
           process.type = 'button'; process.style.margin = '3px 8px';
+          process.className = 'process-owner'; process.dataset.process = owner.key;
           process.addEventListener('click', () => {
             $('flows-dialog').close(); model.flow = ''; $('flow-filter').hidden = true;
             model.search = `process:${owner.key}`; $('search').value = model.search; filterChanged();
@@ -416,29 +539,39 @@ import Split from './vendor/split.js';
         }
         fragment.append(entry);
       }
-      if (!fragment.childNodes.length) fragment.append(el('p', '尚无 TCP 会话。', 'placeholder'));
+      if (!fragment.childNodes.length) fragment.append(el('p', 'No TCP streams recorded.', 'placeholder'));
       $('flows').replaceChildren(fragment);
-    } catch (error) { $('flows').replaceChildren(el('p', `无法读取会话：${error.message}`, 'placeholder')); }
+    } catch (error) { $('flows').replaceChildren(el('p', `Could not load streams: ${error.message}`, 'placeholder')); }
     finally { flowsBusy = false; $('flows-button').disabled = false; }
   });
   async function initialize() {
     try {
       const session = await api('/session');
-      if (!session.token) throw new Error('服务未返回捕获令牌');
+      if (!session.token) throw new Error('The server did not return a capture token');
       model.token = session.token;
       const data = await api('/interfaces'); const fragment = document.createDocumentFragment();
-      for (const item of data.interfaces || []) {
-        const description = item.name === 'any' ? '所有可捕获接口' : item.description && item.description !== item.name ? item.description : '';
-        const option = el('option', `${item.name}${description ? ` · ${description}` : ''}${item.loopback ? ' · 回环' : ''} · ${(item.addresses || []).join(', ') || '无地址'}`);
-        option.value = item.name; option.title = `${item.name} · ${option.textContent}`; fragment.append(option);
+      const advanced = el('optgroup'); advanced.label = 'Advanced interfaces';
+      const items = data.interfaces || [];
+      function addInterface(item) {
+        interfaces.set(item.name, item);
+        const ipv4 = item.addresses?.find(address => !address.includes(':'));
+        const loopback = item.loopback || /^loopback\d*$/.test(item.name);
+        const description = item.name === 'any' ? 'All interfaces' : loopback ? 'Loopback' : ipv4;
+        const option = el('option', description ? `${item.name} · ${description}` : item.name);
+        option.value = item.name;
+        (/^(?:bluetooth|nflog|nfqueue|dbus|usbmon)/.test(item.name) ? advanced : fragment).append(option);
       }
-      if (!fragment.childNodes.length) fragment.append(el('option', '没有可用的捕获接口'));
+      items.filter(item => item.name === 'any').forEach(addInterface);
+      items.filter(item => item.name !== 'any').forEach(addInterface);
+      if (advanced.children.length) fragment.append(advanced);
+      if (!fragment.childNodes.length) fragment.append(el('option', 'No capture interfaces available'));
       $('interface').replaceChildren(fragment);
       if ((data.interfaces || []).some(item => item.name === 'any')) $('interface').value = 'any';
       if (!data.interfaces?.length) $('interface').firstElementChild.value = '';
+      updateInterfaceDetails();
       model.ready = true; controls(); await poll();
       if (model.ready) model.timer = setInterval(() => void poll(), 500);
-    } catch (error) { message(`初始化失败：${error.message}。请检查捕获服务后重新加载页面。`); $('state').textContent = '连接失败'; $('state').dataset.state = 'error'; }
+    } catch (error) { message(`Initialization failed: ${error.message}. Check the capture service and reload.`); $('state').textContent = 'Connection failed'; $('state').dataset.state = 'error'; }
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void poll(); });
   window.addEventListener('pagehide', () => clearInterval(model.timer));

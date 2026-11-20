@@ -35,7 +35,8 @@ class ProcessTracker {
                 for (unsigned j = 0; j < 4; ++j) bytes[i / 2 + j] = uint8_t(word >> (8 * j));
             }
             char text[INET6_ADDRSTRLEN] = {};
-            if (!inet_ntop(family, bytes, text, sizeof text)) return {};
+            const bool mapped = family == AF_INET6 && std::all_of(bytes, bytes + 10, [](auto b) { return b == 0; }) && bytes[10] == 255 && bytes[11] == 255;
+            if (!inet_ntop(mapped ? AF_INET : family, mapped ? bytes + 12 : bytes, text, sizeof text)) return {};
             return endpoint(text, unsigned(std::stoul(value.substr(colon + 1), nullptr, 16)));
         } catch (const std::exception&) { return {}; }
     }
@@ -61,6 +62,7 @@ public:
                 if (!a.empty() && !b.empty()) inode_tuple[cells[9]] = tuple(a, b);
             }
         }
+        if (inode_tuple.empty()) return;
         std::error_code error;
         unsigned processes = 0, descriptors = 0;
         for (const auto& entry : std::filesystem::directory_iterator("/proc", error)) {

@@ -106,6 +106,8 @@ struct Decoder {
                     p.tcp_flags += names[i];
                 }
                 field("TCP", "flags", p.tcp_flags, o + 13, 1);
+                p.tcp_payload_offset = o + header;
+                p.tcp_payload_size = std::min(end, p.bytes.size()) - p.tcp_payload_offset;
                 http(o + header);
                 if ((p.source_port == 53 || p.destination_port == 53) && end <= p.bytes.size() && end >= o + header + 2) {
                     auto start = o + header;

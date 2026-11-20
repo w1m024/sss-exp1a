@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 import socket
+import shutil
 import subprocess
 import tempfile
 
@@ -42,6 +43,10 @@ def main():
             capture.write(pcap); capture.flush()
             decoded = subprocess.check_output(['tcpdump', '-n', '-r', capture.name], stderr=subprocess.DEVNULL).decode()
             require('www.example.com' in decoded and '192.0.2.123' in decoded, 'independent tcpdump DNS decoding')
+            if shutil.which('tshark'):
+                analyzed = subprocess.check_output(['tshark', '-n', '-X', 'lua_script:wireshark/dns_analysis.lua',
+                                                     '-r', capture.name, '-T', 'fields', '-e', 'dns_analysis.query'], text=True)
+                require(analyzed.count('www.example.com') >= 2, 'Wireshark plugin reads the actual project export')
     print('PASS live DNS query/response, record fields, filtering, timeline and pcap/tcpdump')
 
 

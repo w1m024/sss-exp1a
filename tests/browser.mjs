@@ -1,7 +1,7 @@
 // Uses the already-installed Windows Edge and Node's built-in CDP transport.
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,9 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const base = process.env.WIRELENS_URL || 'http://127.0.0.1:8080';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(projectRoot, '.cache/browser');
+for (const file of ['index.html', 'app.js', 'timeline.js']) {
+  assert(!/\p{Script=Han}/u.test(await readFile(path.join(projectRoot, 'web', file), 'utf8')), `${file}: UI text must remain English`);
+}
 await mkdir(output, { recursive: true });
 const edge = process.env.EDGE_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const browser = spawn(edge, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
@@ -66,15 +69,30 @@ try {
   await cdp('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
   await cdp('Page.navigate', { url: base });
   await waitFor("document.getElementById('start') && !document.getElementById('start').disabled", 'ready');
+  assert(await evaluate("document.querySelector('#interface option[value=any]').textContent === 'any · All interfaces'"), 'concise generic interface option');
+  await evaluate("document.getElementById('interface-details-button').click()");
+  await waitFor("document.getElementById('interface-details').matches(':popover-open')", 'interface detail popover');
+  assert(await evaluate("[...document.querySelectorAll('#interface option')].filter(o=>/^(bluetooth|nflog|nfqueue|dbus|usbmon)/.test(o.value)).every(o=>o.parentElement.label==='Advanced interfaces')"), 'special interfaces are grouped');
+  await evaluate("document.getElementById('interface-details').hidePopover()");
+  assert(await evaluate("document.documentElement.lang.startsWith('en') && document.title==='Network' && document.getElementById('flows-button').textContent==='TCP streams'"), 'English document and toolbar labels');
+  await evaluate("echarts.getInstanceByDom(document.getElementById('traffic-overview')).dispatchAction({type:'dataZoom',start:20,end:60})");
+  assert(await evaluate("document.getElementById('reset-time').disabled && document.getElementById('apply-time').disabled"), 'empty chart cannot create an epoch-zero time filter');
   await evaluate("document.getElementById('interface').value='any'; document.getElementById('bpf').value='tcp and host 127.0.0.1 and not port 8080 and not port 8081'; document.getElementById('start').click()");
   await waitFor("document.getElementById('state').dataset.state==='running'", 'capture running');
   await traffic();
   await waitFor("document.querySelectorAll('#packet-body tr').length>0", 'live packet rows');
   await evaluate("[...document.querySelectorAll('#protocols button')].find(b=>b.textContent==='HTTP').click()");
   await waitFor("document.querySelectorAll('#packet-body tr').length>1", 'HTTP filter');
-  await waitFor("document.getElementById('time-range').textContent.includes('全部保留数据')", 'retained overview');
+  await waitFor("document.getElementById('time-range').textContent.includes('All retained packets')", 'retained overview');
+  await evaluate("document.getElementById('time-from').value='2';document.getElementById('time-to').value='1';document.getElementById('time-form').requestSubmit()");
+  assert(await evaluate("!document.getElementById('time-to').validity.valid && document.getElementById('reset-time').disabled"), 'reversed manual bounds preserve current selection');
+  await evaluate("document.getElementById('time-from').value='0';document.getElementById('time-to').value=String(echarts.getInstanceByDom(document.getElementById('traffic-overview')).getOption().xAxis[0].max/2);document.getElementById('time-to').dispatchEvent(new Event('input'));document.getElementById('time-to').value=Number(document.getElementById('time-to').value).toFixed(3);document.getElementById('time-form').requestSubmit()");
+  await waitFor("!document.getElementById('reset-time').disabled && document.querySelectorAll('#packet-body tr').length>0", 'manual range filters packets');
+  assert(await evaluate("/\\d{2}:\\d{2}:\\d{2}\\.\\d{6}/.test(document.getElementById('time-range').textContent)"), 'selection displays microsecond timestamp');
+  await evaluate("document.getElementById('reset-time').click()");
+  await waitFor("document.getElementById('reset-time').disabled && document.querySelectorAll('#packet-body tr').length>1", 'reset manual range');
   await evaluate("document.getElementById('metric-bytes').click()");
-  assert(await evaluate("echarts.getInstanceByDom(document.getElementById('traffic-overview')).getOption().yAxis[0].name==='B / 桶'"), 'byte metric uses wire bytes');
+  assert(await evaluate("echarts.getInstanceByDom(document.getElementById('traffic-overview')).getOption().yAxis[0].name==='B / bin'"), 'byte metric uses wire bytes');
   await evaluate("document.getElementById('metric-packets').click(); window.__timelineQueries=[];window.__timelineFetch=window.fetch;window.fetch=(...args)=>{if(String(args[0]).includes('/api/packets?'))window.__timelineQueries.push(String(args[0]));return window.__timelineFetch(...args)};echarts.getInstanceByDom(document.getElementById('traffic-overview')).dispatchAction({type:'dataZoom',start:20,end:60})");
   await waitFor("window.__timelineQueries.some(q=>q.includes('from_us=')&&q.includes('to_us=')) && document.querySelectorAll('#packet-body tr').length>0", 'time bounds reach packet API');
   const selectedRange = await evaluate("window.__timelineQueries.filter(q=>q.includes('from_us=')).at(-1).split('&').filter(s=>s.startsWith('from_us=')||s.startsWith('to_us=')).join('&')");
@@ -149,6 +167,19 @@ try {
   await waitFor("!document.getElementById('flow-filter').hidden && document.querySelectorAll('#packet-body tr').length>0", 'follow TCP conversation');
   await evaluate("document.getElementById('clear-flow').click(); document.getElementById('flows-button').click()");
   await waitFor("document.querySelectorAll('#flows .flow-row').length>0", 'flow dialog');
+  await evaluate("[...document.querySelectorAll('#flows button')].find(b=>b.textContent==='Analyze HTTP').click()");
+  await waitFor("[...document.querySelectorAll('#flows button')].some(b=>/^#\\d+ HTTP\\/1.1 200 OK$/.test(b.textContent))", 'HTTP exchange with a source packet');
+  assert(await evaluate("document.querySelector('.http-exchange-row[aria-pressed=true]').textContent.includes('200') && document.querySelector('.http-waterfall .http-wait') && document.querySelector('.http-waterfall .http-receive') && document.querySelector('.http-exchange-details').textContent.includes('Content-Length: 4')"), 'HTTP row, waterfall phases and response headers');
+  const responsePacket = await evaluate("(()=>{const b=[...document.querySelectorAll('#flows button')].find(b=>/^#\\d+ HTTP\\/1.1 200 OK$/.test(b.textContent));const id=b.textContent.split(' ')[0];b.click();return id})()");
+  await waitFor(`document.getElementById('detail-id').textContent===${JSON.stringify(responsePacket)} && document.querySelectorAll('#fields button').length>0`, 'HTTP response opens packet inspector');
+  await evaluate("document.getElementById('flows-button').click()");
+  await waitFor("document.querySelectorAll('#flows .process-owner').length>0", 'observed PID action');
+  const processKey = await evaluate("document.querySelector('#flows .process-owner').dataset.process");
+  await evaluate("document.querySelector('#flows .process-owner').click()");
+  await waitFor(`document.getElementById('search').value===${JSON.stringify('process:' + processKey)} && document.querySelectorAll('#packet-body tr').length>1`, 'process button filters multiple packets');
+  await evaluate("document.getElementById('search').value='';document.getElementById('search').dispatchEvent(new Event('input'))");
+  await delay(350);
+  await waitFor("document.querySelectorAll('#packet-body tr').length>1", 'clear process filter');
   await evaluate("document.getElementById('close-flows').click(); document.getElementById('bpf').value='tcp and ('; document.getElementById('start').click()");
   await waitFor("!document.getElementById('error').hidden", 'bad BPF error');
   assert(await evaluate("document.getElementById('state').dataset.state==='stopped'"), 'invalid filter preserves stopped capture');

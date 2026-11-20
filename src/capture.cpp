@@ -1,4 +1,5 @@
 #include "capture.hpp"
+#include "http_stream.hpp"
 #include "ipc.hpp"
 #include "json.hpp"
 #include <pcap/pcap.h>
@@ -443,6 +444,82 @@ std::string Capture::flows_json() const {
             + ",\"processes\":" + owners_json(f.owners) + '}';
     }
     return result + "]}";
+}
+std::string Capture::http_exchanges_json(const std::string& flow) const {
+    namespace http = http_stream;
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::array<http::Direction, 2> directions;
+    std::string client;
+    for (const auto& p : packets_) {
+        if (p.flow_id != flow || (p.tcp_flag_bits & 0x12) != 2) continue;
+        const auto source = endpoint(p.source, p.source_port);
+        if (!client.empty() && client != source) return "{\"state\":\"uncertain_direction\",\"exchanges\":[]}";
+        client = source;
+        directions[0].base = p.tcp_sequence + 1;
+    }
+    if (client.empty()) return "{\"state\":\"missing_handshake\",\"exchanges\":[]}";
+    for (const auto& p : packets_) if (p.flow_id == flow && (p.tcp_flag_bits & 0x12) == 0x12 &&
+        endpoint(p.source, p.source_port) != client && p.tcp_ack == *directions[0].base) {
+        directions[1].base = p.tcp_sequence + 1;
+        break;
+    }
+    if (!directions[1].base) return "{\"state\":\"missing_handshake\",\"exchanges\":[]}";
+    for (const auto& p : packets_) if (p.flow_id == flow) {
+        directions[endpoint(p.source, p.source_port) == client ? 0 : 1].append(p);
+    }
+    const auto request = directions[0].prefix(), response = directions[1].prefix();
+    std::string result = "[";
+    std::size_t a = 0, b = 0;
+    unsigned count = 0;
+    const char* issue = "incomplete_message";
+    auto metadata = [](const http::Message& message) {
+        return "{\"headers\":" + json_string(std::string(message.headers)) +
+            ",\"body_bytes\":" + std::to_string(message.body_size) +
+            ",\"framing\":" + json_string(message.framing) + '}';
+    };
+    for (; count < 64 && a < request.size(); ++count) {
+        auto req = http::parse(request, a, false, issue);
+        if (!req) break;
+        if (req->method == "CONNECT") { issue = "unsupported_framing"; break; }
+        auto next = b;
+        auto res = http::parse(response, next, true, issue, req->method);
+        while (res && res->status < 200 && res->status != 101) {
+            next = res->end;
+            res = http::parse(response, next, true, issue, req->method);
+        }
+        if (!res) break;
+        if (res->status == 101) { issue = "unsupported_framing"; break; }
+        if (count) result += ',';
+        const auto* first = directions[0].source[a];
+        const auto* reply = directions[1].source[next];
+        const auto* last = directions[1].source[res->end - 1];
+        auto completed = reply->timestamp_us;
+        for (auto i = next; i < res->end; ++i) completed = std::max(completed, directions[1].source[i]->timestamp_us);
+        result += "{\"request\":" + json_string(std::string(req->line)) + ",\"response\":" + json_string(std::string(res->line))
+            + ",\"request_packet\":" + std::to_string(first->id) + ",\"response_packet\":" + std::to_string(reply->id);
+        result += ",\"method\":" + json_string(std::string(req->method)) + ",\"target\":" + json_string(std::string(req->target))
+            + ",\"status\":" + std::to_string(res->status) + ",\"request_details\":" + metadata(*req)
+            + ",\"response_details\":" + metadata(*res) + ",\"response_last_packet\":" + std::to_string(last->id)
+            + ",\"request_us\":" + std::to_string(first->timestamp_us) + ",\"response_us\":" + std::to_string(reply->timestamp_us)
+            + ",\"response_complete_us\":" + std::to_string(completed);
+        if (reply->timestamp_us >= first->timestamp_us) {
+            result += ",\"elapsed_us\":" + std::to_string(uint64_t(reply->timestamp_us) - uint64_t(first->timestamp_us));
+        }
+        result += '}';
+        a = req->end;
+        b = res->end;
+        issue = "incomplete_message";
+    }
+    const char* state = count ? "complete" : "no_messages";
+    if (a < request.size() || b < response.size()) state = issue;
+    if (count == 64 && (a < request.size() || b < response.size())) state = "analysis_limit";
+    if (directions[0].limited || directions[1].limited) state = "analysis_limit";
+    if (directions[0].truncated || directions[1].truncated) state = "truncated_capture";
+    if ((!directions[0].conflict && request.size() < directions[0].bytes.size()) ||
+        (!directions[1].conflict && response.size() < directions[1].bytes.size())) state = "missing_segments";
+    if (directions[0].conflict || directions[1].conflict) state = "conflicting_overlap";
+    return "{\"state\":" + json_string(state) +
+        ",\"exchanges\":" + result + "]}";
 }
 std::string Capture::export_pcap() const {
     std::lock_guard<std::mutex> lock(mutex_);

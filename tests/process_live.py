@@ -12,8 +12,9 @@ from integration import Service, eventually, require
 
 CHILD = '''
 import socket,sys
-s=socket.socket(socket.AF_INET6 if sys.argv[1]=='6' else socket.AF_INET)
-s.bind(('::1' if sys.argv[1]=='6' else '127.0.0.1',0));s.listen(4)
+s=socket.socket(socket.AF_INET6 if sys.argv[1]!='4' else socket.AF_INET)
+if sys.argv[1]=='46':s.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,0)
+s.bind(('::' if sys.argv[1]=='46' else '::1' if sys.argv[1]=='6' else '127.0.0.1',0));s.listen(4)
 print(s.getsockname()[1],flush=True)
 connections=[s.accept()[0] for _ in range(3)]
 print('ready',flush=True)
@@ -28,7 +29,7 @@ def main():
                               helper='/opt/wirelens/libexec/wirelens-capture', port=18894)
     with Service(args, 5000) as service:
         service.start('tcp and not port 18894 and not port 8080 and not port 8081')
-        for version in (4, 6):
+        for version in (4, 6, 46):
             child = subprocess.Popen([sys.executable, '-u', '-c', CHILD, str(version)],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             try:
@@ -60,7 +61,7 @@ def main():
                 child.wait(timeout=3)
                 child.stdin.close(); child.stdout.close()
         service.request('/api/stop', method='POST')
-    print('PASS IPv4/IPv6 real child PID, three flows per process, exact identity filter, unknown PID and exit history')
+    print('PASS IPv4/IPv6/dual-stack real child PID, three flows per process, exact identity filter, unknown PID and exit history')
 
 
 if __name__ == '__main__':

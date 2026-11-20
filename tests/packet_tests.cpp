@@ -163,6 +163,26 @@ void dns_detection() {
     bool address = false;
     for (const auto& f : p.fields) if (f.name == "address_ipv4") { CHECK(f.value == "192.0.2.123"); address = true; }
     CHECK(address);
+    for (unsigned type : {2u, 5u, 12u, 28u}) {
+        auto record = response;
+        record.resize(query.size() + 12);
+        put16(record, query.size() + 2, type);
+        if (type == 28) {
+            put16(record, query.size() + 10, 16);
+            Bytes ipv6_address(16); ipv6_address[0] = 0x20; ipv6_address[1] = 1;
+            ipv6_address[2] = 0x0d; ipv6_address[3] = 0xb8; ipv6_address[15] = 1;
+            record.insert(record.end(), ipv6_address.begin(), ipv6_address.end());
+        } else {
+            put16(record, query.size() + 10, 2); record.push_back(0xc0); record.push_back(12);
+        }
+        p = parse(v4(udp(record), 17)); CHECK(p.protocol == "DNS");
+        bool decoded = false;
+        for (const auto& f : p.fields) {
+            if (type == 28 && f.name == "address_ipv6") { CHECK(f.value == "2001:db8::1"); decoded = true; }
+            if (type != 28 && f.name == "target_name") { CHECK(f.value == "www.example.com"); decoded = true; }
+        }
+        CHECK(decoded);
+    }
     for (std::size_t n = 0; n < response.size(); ++n) {
         CHECK(parse(v4(udp(Bytes(response.begin(), response.begin() + n)), 17)).protocol != "DNS");
     }

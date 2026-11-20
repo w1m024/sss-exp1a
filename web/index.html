@@ -1,58 +1,60 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en-US">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>网络抓包</title>
+  <title>Network</title>
   <link rel="stylesheet" href="/app.css">
   <script src="/vendor/echarts.min.js" defer></script>
   <script type="module" src="/app.js"></script>
 </head>
 <body>
   <header class="panel-tabs">
-    <span class="panel-tab active">网络抓包</span>
-    <div class="connection"><span id="state" role="status">连接中</span></div>
+    <span class="panel-tab active">Network</span>
+    <div class="connection"><span id="state" role="status">Connecting…</span></div>
   </header>
   <main>
     <form id="capture-form" class="capture-bar">
-      <button id="start" type="submit" class="toolbar-button record" disabled title="开始捕获" aria-label="开始捕获"><span class="icon icon-record" aria-hidden="true"></span><span>开始</span></button>
-      <button id="stop" type="button" class="toolbar-button" disabled title="停止捕获" aria-label="停止捕获"><span class="icon icon-stop" aria-hidden="true"></span></button>
-      <button id="clear-view" type="button" class="toolbar-button" title="清空显示；服务端保留的数据仍可导出" aria-label="清空显示"><span class="icon icon-clear" aria-hidden="true"></span></button>
+      <button id="start" type="submit" class="toolbar-button record" disabled title="Start recording" aria-label="Start recording"><span class="icon icon-record" aria-hidden="true"></span><span>Record</span></button>
+      <button id="stop" type="button" class="toolbar-button" disabled title="Stop recording" aria-label="Stop recording"><span class="icon icon-stop" aria-hidden="true"></span></button>
+      <button id="clear-view" type="button" class="toolbar-button" title="Clear the view; retained packets remain available for export" aria-label="Clear"><span class="icon icon-clear" aria-hidden="true"></span></button>
       <span class="toolbar-separator" aria-hidden="true"></span>
-      <label class="interface-control">接口 <select id="interface" required aria-label="捕获网络接口"><option value="">读取接口…</option></select></label>
-      <label class="bpf-control"><span class="icon icon-filter" aria-hidden="true"></span><span class="sr-only">捕获过滤器 BPF</span><input id="bpf" placeholder="捕获过滤器，例如 tcp port 80" autocomplete="off" spellcheck="false"></label>
-      <button id="export" type="button" class="toolbar-button" disabled title="导出服务端保留的全部数据包"><span class="icon icon-download" aria-hidden="true"></span><span>导出 pcap</span></button>
-      <button id="flows-button" type="button" class="toolbar-button">TCP 会话</button>
+      <label class="interface-control">Interface <select id="interface" required aria-label="Capture interface"><option value="">Loading interfaces…</option></select></label>
+      <button id="interface-details-button" type="button" class="toolbar-button" popovertarget="interface-details" disabled>Details</button>
+      <div id="interface-details" popover aria-label="Capture interface details"></div>
+      <label class="bpf-control"><span class="icon icon-filter" aria-hidden="true"></span><span class="sr-only">Capture filter (BPF)</span><input id="bpf" placeholder="Capture filter, e.g. tcp port 80" autocomplete="off" spellcheck="false"></label>
+      <button id="export" type="button" class="toolbar-button" disabled title="Export all retained packets"><span class="icon icon-download" aria-hidden="true"></span><span>Export PCAP</span></button>
+      <button id="flows-button" type="button" class="toolbar-button">TCP streams</button>
     </form>
     <div id="error" class="notice error" role="alert" hidden></div>
     <div class="filter-bar">
-      <label class="search"><span class="icon icon-search" aria-hidden="true"></span><span class="sr-only">搜索数据包</span><input id="search" type="search" placeholder="过滤地址、端口、摘要" autocomplete="off"></label>
+      <label class="search"><span class="icon icon-search" aria-hidden="true"></span><span class="sr-only">Filter packets</span><input id="search" type="search" placeholder="Filter by address, port, or info" autocomplete="off"></label>
       <span class="toolbar-separator" aria-hidden="true"></span>
-      <div id="protocols" class="protocols" role="group" aria-label="显示协议筛选"></div>
-      <span id="visible-count" class="visible-count">0 条</span>
+      <div id="protocols" class="protocols" role="group" aria-label="Filter by protocol"></div>
+      <span id="visible-count" class="visible-count">0 packets</span>
     </div>
-    <div id="flow-filter" class="flow-filter" hidden><span id="flow-label"></span><button id="clear-flow" type="button">清除会话筛选 ×</button></div>
+    <div id="flow-filter" class="flow-filter" hidden><span id="flow-label"></span><button id="clear-flow" type="button">Clear stream filter ×</button></div>
     <div id="gap" class="notice" role="status" hidden></div>
-    <section class="overview" aria-label="数据包时间分布"><div class="timeline-toolbar"><button id="metric-packets" type="button" aria-pressed="true">包数</button><button id="metric-bytes" type="button" aria-pressed="false">字节数</button><button id="brush-time" type="button" aria-pressed="false">框选时间</button><button id="reset-time" type="button">全部时间</button><span id="time-range" role="status"></span></div><div id="traffic-overview" aria-label="数据包时间图：滚轮缩放，拖动下方滑块筛选列表"></div></section>
+    <section class="overview" aria-label="Packet timeline"><div class="timeline-toolbar"><button id="metric-packets" type="button" aria-pressed="true">Packets</button><button id="metric-bytes" type="button" aria-pressed="false">Bytes</button><button id="brush-time" type="button" aria-pressed="false">Select range</button><button id="reset-time" type="button">Reset zoom</button><form id="time-form" class="time-form" aria-label="Time range"><label>Range <input id="time-from" type="number" min="0" step="0.001" required aria-label="Start time in milliseconds" placeholder="Start"></label><span>—</span><input id="time-to" type="number" min="0" step="0.001" required aria-label="End time in milliseconds" placeholder="End"><span>ms</span><button id="apply-time" type="submit">Apply</button></form><span id="time-range" role="status"></span></div><div id="traffic-overview" aria-label="Packet timeline: scroll to zoom or drag the slider to filter packets"></div></section>
     <div class="workspace" id="workspace">
       <section class="packets-pane" id="packet-pane" aria-labelledby="packets-title">
-        <h1 id="packets-title" class="sr-only">数据包列表</h1>
-        <div class="table-scroll" id="packet-scroll" tabindex="0" aria-label="数据包列表，使用上下方向键选择，Home 和 End 跳转">
-          <table class="packet-table"><colgroup><col class="col-id"><col class="col-time"><col class="col-source"><col class="col-destination"><col class="col-protocol"><col class="col-length"><col></colgroup><thead><tr><th scope="col">#</th><th scope="col">时间</th><th scope="col">来源</th><th scope="col">目标</th><th scope="col">协议</th><th scope="col" class="numeric">长度</th><th scope="col">摘要</th></tr></thead><tbody id="packet-body"></tbody></table>
-          <div id="empty" class="empty"><strong>尚无数据包</strong><p>选择捕获接口，然后点击开始。</p></div>
+        <h1 id="packets-title" class="sr-only">Packets</h1>
+        <div class="table-scroll" id="packet-scroll" tabindex="0" aria-label="Packet list. Use arrow keys to select packets, or Home and End to jump.">
+          <table class="packet-table"><colgroup><col class="col-id"><col class="col-time"><col class="col-source"><col class="col-destination"><col class="col-protocol"><col class="col-length"><col></colgroup><thead><tr><th scope="col">#</th><th scope="col">Time</th><th scope="col">Source</th><th scope="col">Destination</th><th scope="col">Protocol</th><th scope="col" class="numeric">Length</th><th scope="col">Info</th></tr></thead><tbody id="packet-body"></tbody></table>
+          <div id="empty" class="empty"><strong>No packets recorded</strong><p>Select an interface and start recording.</p></div>
         </div>
       </section>
-      <aside id="inspector" class="inspector" aria-label="数据包详情" hidden>
-        <div class="inspector-heading"><span id="detail-id">—</span><button id="close-detail" type="button" class="toolbar-button" title="关闭详情（Esc）" aria-label="关闭详情"><span class="icon icon-close" aria-hidden="true"></span></button></div>
-        <div class="detail-tabs" role="tablist" aria-label="详情视图"><button id="fields-tab" type="button" role="tab" aria-selected="true" aria-controls="fields-panel">协议字段</button><button id="bytes-tab" type="button" role="tab" aria-selected="false" aria-controls="bytes-panel" tabindex="-1">原始字节</button><button id="follow" type="button" class="follow" disabled>跟踪 TCP 会话</button></div>
+      <aside id="inspector" class="inspector" aria-label="Packet details" hidden>
+        <div class="inspector-heading"><span id="detail-id">—</span><button id="close-detail" type="button" class="toolbar-button" title="Close details (Esc)" aria-label="Close details"><span class="icon icon-close" aria-hidden="true"></span></button></div>
+        <div class="detail-tabs" role="tablist" aria-label="Detail views"><button id="fields-tab" type="button" role="tab" aria-selected="true" aria-controls="fields-panel">Packet details</button><button id="bytes-tab" type="button" role="tab" aria-selected="false" aria-controls="bytes-panel" tabindex="-1">Bytes</button><button id="follow" type="button" class="follow" disabled>Follow TCP stream</button></div>
         <div id="detail-warning" class="notice" hidden></div>
-        <section id="fields-panel" class="detail-panel" role="tabpanel" aria-labelledby="fields-tab"><div id="fields" class="fields"><p class="placeholder">选择一个数据包查看字段。</p></div><div class="field-foot">点击字段，定位原始字节。</div></section>
-        <section id="bytes-panel" class="detail-panel" role="tabpanel" aria-labelledby="bytes-tab" hidden><div id="byte-range" class="byte-range" role="status">选择字段可定位对应字节</div><div id="hex" class="hex"><p class="placeholder">等待选择数据包。</p></div></section>
+        <section id="fields-panel" class="detail-panel" role="tabpanel" aria-labelledby="fields-tab"><div id="fields" class="fields"><p class="placeholder">Select a packet to view its details.</p></div><div class="field-foot">Select a field to highlight its bytes.</div></section>
+        <section id="bytes-panel" class="detail-panel" role="tabpanel" aria-labelledby="bytes-tab" hidden><div id="byte-range" class="byte-range" role="status">Select a field to highlight its bytes</div><div id="hex" class="hex"><p class="placeholder">Select a packet to view its bytes.</p></div></section>
       </aside>
     </div>
   </main>
-  <footer class="statusbar" aria-label="捕获统计"><span><b id="retained">0</b> 个保留包</span><span>已接收 <b id="received">0</b></span><span>淘汰 <b id="evicted">0</b></span><span>内存 <b id="bytes">0 B</b></span><span>丢包 <b id="dropped">—</b></span><span id="status-note">本地捕获服务</span></footer>
-  <dialog id="flows-dialog" aria-labelledby="flows-title"><div class="dialog-head"><h2 id="flows-title">TCP 会话</h2><button id="close-flows" aria-label="关闭 TCP 会话" type="button">关闭 ×</button></div><p class="dialog-hint">选择会话或进程筛选数据包 · 最近 500 个会话。进程关联仅限同一 WSL 中当前用户的 TCP 连接；快照可能漏掉极短连接，不包含 Windows 进程。</p><div id="flows" class="flows"></div></dialog>
+  <footer class="statusbar" aria-label="Capture statistics"><span><b id="retained">0</b> retained</span><span>Received <b id="received">0</b></span><span>Evicted <b id="evicted">0</b></span><span>Memory <b id="bytes">0 B</b></span><span>Dropped <b id="dropped">—</b></span><span id="status-note">Local capture service</span></footer>
+  <dialog id="flows-dialog" aria-labelledby="flows-title"><div class="dialog-head"><h2 id="flows-title">TCP streams</h2><button id="close-flows" aria-label="Close TCP streams" type="button">Close ×</button></div><p class="dialog-hint">Filter packets by stream or process · Latest 500 streams. Process attribution covers the current Linux user in this WSL instance. Short-lived connections may be missed; Windows processes are not included.</p><div id="flows" class="flows"></div></dialog>
 </body>
 </html>
