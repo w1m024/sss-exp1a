@@ -1,5 +1,5 @@
--- DNS analysis postdissector. Uses Wireshark's DNS decoding and TCP reassembly.
--- Load explicitly: tshark -X lua_script:wireshark/dns_analysis.lua -r capture.pcap
+-- DNS 后置分析器，使用 Wireshark 的 DNS 解析和 TCP 重组结果。
+-- 显式加载： tshark -X lua_script:wireshark/dns_analysis.lua -r capture.pcap
 local proto = Proto("dns_analysis", "DNS query analysis")
 local query_name = Field.new("dns.qry.name")
 local response_code = Field.new("dns.flags.rcode")

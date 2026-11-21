@@ -54,8 +54,8 @@ def fixtures(mode):
         return []
     if mode == "single":
         return [(BASE, 101, ethernet_tcp())]
-    # Deliberately nonmonotonic timestamps, duplicates, exact bucket boundaries,
-    # a short capture with larger wire length, and a second protocol.
+    # 构造非递增时间戳、重复时间、分桶边界、
+    # 原始长度大于捕获长度的包，以及另一种协议。
     stamps = [BASE + (i * 7919 % 16001) for i in range(1201)]
     stamps[-7:] = [BASE, BASE + 16000, BASE + 1000, BASE + 999,
                   BASE + 1000, BASE + 15999, BASE + 2000]
@@ -82,7 +82,7 @@ class TimelineService(Service):
         helper.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " " +
                           shlex.quote(str(Path(__file__).resolve())) + ' --helper "$@"\n')
         helper.chmod(0o700)
-        # Private assets keep this backend test independent of frontend downloads.
+        # 使用临时静态文件，让后端测试不依赖前端下载。
         web = self.root / "web"
         for name in ["index.html", "app.css", "app.js", "timeline.js", "vendor/split.js", "vendor/echarts.min.js"] + [
                 "vendor/devtools/" + name + ".svg" for name in
@@ -197,7 +197,7 @@ def run(s):
             page = s.get("/packets", after=packets[-1]["id"] - 1, from_us=BASE + 20000)
             require(page["packets"] == [] and page["cursor"] == packets[-1]["id"], "Excluded scan cursor")
             check_timeline(s, packets, **params)  # Time selection never narrows context.
-        # One endpoint may be supplied together with the shared display filters.
+        # 时间端点可与其他显示过滤条件一起使用。
         selected = s.all_packets(protocol="TCP", search="192.0.2.1", flow=flow)
         require(s.all_packets(protocol="TCP", search="192.0.2.1", flow=flow, to_us=BASE + 8000) ==
                 [p for p in selected if p["timestamp_us"] <= BASE + 8000], "Combined filters")

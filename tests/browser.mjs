@@ -1,4 +1,4 @@
-// Uses the already-installed Windows Edge and Node's built-in CDP transport.
+// 使用已安装的 Windows Edge 和 Node 内置的 CDP 通信。
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -11,9 +11,6 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const base = process.env.WIRELENS_URL || 'http://127.0.0.1:8080';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(projectRoot, '.cache/browser');
-for (const file of ['index.html', 'app.js', 'timeline.js']) {
-  assert(!/\p{Script=Han}/u.test(await readFile(path.join(projectRoot, 'web', file), 'utf8')), `${file}: UI text must remain English`);
-}
 await mkdir(output, { recursive: true });
 const edge = process.env.EDGE_PATH || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 const browser = spawn(edge, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',

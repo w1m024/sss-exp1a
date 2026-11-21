@@ -50,16 +50,16 @@ def packet(data, index, wire_length=None):
 def main():
     if len(sys.argv) != 4 or sys.argv[1] != "--capture" or sys.argv[2] not in MODES:
         return 2
-    mode = sys.argv[2]  # The production BPF argument is deliberately ignored.
+    mode = sys.argv[2]  # 此测试有意忽略实际 BPF 参数。
     root = Path(os.environ["WIRELENS_REPLAY_DIR"])
-    # Atomic publication lets the runner target exactly the worker for this scenario.
+    # 原子发布 PID 文件，让测试准确找到当前工作进程。
     temporary = root / (mode + ".pid.tmp")
     temporary.write_text(str(os.getpid()), encoding="ascii")
     temporary.replace(root / (mode + ".pid"))
     if mode == "partial":
         write(b"W")
     else:
-        message(1, struct.pack("!I", 1))  # DLT_EN10MB
+        message(1, struct.pack("!I", 1))  # 以太网链路类型 DLT_EN10MB
         if mode == "bad-wire":
             packet(ethernet_tcp(), 0, wire_length=53)
         elif mode == "oversize":
@@ -84,7 +84,7 @@ def main():
 
 
 if __name__ == "__main__":
-    # Preserve normal external SIGTERM semantics, rather than simulating an IPC error.
+    # 保留外部 SIGTERM 的正常语义，避免模拟成 IPC 错误。
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
     try:
         sys.exit(main())

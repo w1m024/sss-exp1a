@@ -101,7 +101,7 @@ class Service:
         return result
 
     def reaped(self, pid):
-        # Unlike kill(pid, 0), this also fails while the child is a zombie.
+        # 子进程成为僵尸进程时也会失败，行为与 kill(pid, 0) 不同。
         eventually(lambda: not Path(f"/proc/{pid}").exists(), f"worker {pid} reaped", timeout=2)
         self.workers.discard(pid)
 
@@ -114,7 +114,7 @@ class Service:
         return status
 
     def close(self):
-        # Always release stopped workers, even if an assertion or HTTP timeout failed.
+        # 即使断言失败或 HTTP 超时，也要释放被暂停的工作进程。
         for path in self.root.glob("*.pid"):
             with contextlib.suppress(ValueError, OSError):
                 self.workers.add(int(path.read_text()))
@@ -122,7 +122,7 @@ class Service:
             with contextlib.suppress(ProcessLookupError, FileNotFoundError):
                 status = Path(f"/proc/{pid}/status").read_text()
                 parent = next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:"))
-                # Old PID files may outlive a reaped child; never signal a reused PID.
+                # 旧 PID 文件可能在子进程回收后仍存在，不能向复用的 PID 发信号。
                 if self.process is not None and int(parent) == self.process.pid:
                     os.kill(pid, signal.SIGKILL)
         if self.process is not None:

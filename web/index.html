@@ -32,7 +32,6 @@
       <label class="search"><span class="icon icon-search" aria-hidden="true"></span><span class="sr-only">Filter packets</span><input id="search" type="search" placeholder="Filter by address, port, or info" autocomplete="off"></label>
       <span class="toolbar-separator" aria-hidden="true"></span>
       <div id="protocols" class="protocols" role="group" aria-label="Filter by protocol"></div>
-      <span id="visible-count" class="visible-count">0 packets</span>
     </div>
     <div id="flow-filter" class="flow-filter" hidden><span id="flow-label"></span><button id="clear-flow" type="button">Clear stream filter ×</button></div>
     <div id="gap" class="notice" role="status" hidden></div>
@@ -55,6 +54,6 @@
     </div>
   </main>
   <footer class="statusbar" aria-label="Capture statistics"><span><b id="retained">0</b> retained</span><span>Received <b id="received">0</b></span><span>Evicted <b id="evicted">0</b></span><span>Memory <b id="bytes">0 B</b></span><span>Dropped <b id="dropped">—</b></span><span id="status-note">Local capture service</span></footer>
-  <dialog id="flows-dialog" aria-labelledby="flows-title"><div class="dialog-head"><h2 id="flows-title">TCP streams</h2><button id="close-flows" aria-label="Close TCP streams" type="button">Close ×</button></div><p class="dialog-hint">Filter packets by stream or process · Latest 500 streams. Process attribution covers the current Linux user in this WSL instance. Short-lived connections may be missed; Windows processes are not included.</p><div id="flows" class="flows"></div></dialog>
+  <dialog id="flows-dialog" aria-labelledby="flows-title"><div class="dialog-head"><h2 id="flows-title">TCP streams</h2><button id="close-flows" aria-label="Close TCP streams" type="button">Close ×</button></div><p class="dialog-hint">按 TCP 会话或进程筛选数据包，显示最近 500 条会话。进程关联覆盖当前 Linux 用户可读取的连接。进程未知可能由连接时间过短、进程退出或读取权限不足造成；Windows 进程不在关联范围内。</p><div id="flows" class="flows"></div></dialog>
 </body>
 </html>

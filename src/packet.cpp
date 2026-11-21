@@ -66,6 +66,7 @@ struct Decoder {
             line += char(c);
         }
     }
+    // 根据 IP 协议号解析传输层，读取前检查报文长度。
     void transport(std::size_t o, uint8_t proto) {
         if (proto == 6) p.transport = "TCP";
         else if (proto == 17) p.transport = "UDP";
@@ -122,6 +123,7 @@ struct Decoder {
             number(p.transport.c_str(), "code", p.bytes[o + 1], o + 1, 1);
         }
     }
+    // 解析 IP 地址和头部长度，再定位传输层。
     void ip(std::size_t o, uint16_t type) {
         if (type != 0x0800 && type != 0x86dd) return;
         const bool v6 = type == 0x86dd;
@@ -142,7 +144,7 @@ struct Decoder {
                 if (need(o + 40, 8)) number("IPv6", "fragment_offset_flags", u16(o + 42), o + 42, 2);
                 return;
             }
-            // Extension headers (including jumbo payloads) are intentionally not traversed.
+            // 暂不遍历 IPv6 扩展头（包括 jumbo payload）。
             if (next == 0 || next == 43 || next == 60 || next == 51 || next == 50 || next == 135) {
                 field("IPv6", "extension_status", "not parsed", o + 6, 1);
                 return;
@@ -212,7 +214,7 @@ Packet decode_packet(std::vector<uint8_t> bytes, int datalink, int64_t timestamp
     Decoder d;
     d.p.bytes = std::move(bytes); d.p.datalink = datalink;
     d.p.timestamp_us = timestamp_us; d.p.wire_length = wire_length;
-    // wire_length is metadata; protocol bounds come exclusively from protocol headers.
+    // wire_length 是元数据；协议边界以协议头部为准。
     d.end = std::numeric_limits<std::size_t>::max();
     d.p.truncated = wire_length > d.p.bytes.size();
     d.decode();

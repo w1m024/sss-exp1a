@@ -6,8 +6,8 @@
 #include <stdexcept>
 
 namespace wirelens {
-// DNS offsets are bounded by the UDP length (or one TCP DNS length prefix),
-// never by Ethernet padding. Commit fields only after validating the whole PDU.
+// DNS 偏移受 UDP 长度或 TCP DNS 长度前缀限制，
+// 不读取以太网填充。整个 PDU 校验通过后才保存字段。
 inline bool decode_dns(Packet& packet, std::size_t base, std::size_t length) {
     if (base > packet.bytes.size() || length > packet.bytes.size() - base || length < 12) return false;
     const auto* data = packet.bytes.data() + base;

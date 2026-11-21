@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-// Always active, including builds with NDEBUG.
+// 始终执行检查，包括定义 NDEBUG 的构建。
 #define CHECK(x) do { if (!(x)) { std::cerr << __FILE__ << ':' << __LINE__ << ": " #x "\n"; std::abort(); } } while (false)
 using Bytes = std::vector<uint8_t>;
 using wirelens::Packet;
@@ -113,7 +113,7 @@ void http_detection() {
         auto p = parse(v4(tcp(line, 80))); CHECK(p.protocol == "TCP" && p.http_line.empty());
     }
     auto b = v4(tcp("GET / HTTP/1.1\r\n")); put16(b, 2, 40);
-    CHECK(parse(b).protocol == "TCP"); // Entire visible line is Ethernet/IP padding.
+    CHECK(parse(b).protocol == "TCP"); // 可见内容全部是 Ethernet/IP 填充。
     b = v4(tcp("GET / HTTP/1.1\r\n")); put16(b, 2, unsigned(b.size() - 1)); CHECK(parse(b).http_line.empty());
     b = v4(tcp("GET / HTTP/1.1\r\n")); b.pop_back(); CHECK(parse(b).http_line.empty());
     CHECK(parse(v6(tcp("GET / HTTP/1.1\r\n", 8888))).protocol == "HTTP");
@@ -133,7 +133,7 @@ void all_prefixes() {
     for (std::size_t n = 0; n < tagged.size(); ++n) {
         CHECK(parse(Bytes(tagged.begin(), tagged.begin() + n), 1, unsigned(tagged.size())).truncated);
     }
-    // Mutate every byte across all link types: exercise hostile lengths and discriminators.
+    // 逐字节修改各链路类型的样本，检查异常长度和类型字段。
     for (int dlt : {1, 113, 276, 0, 12}) {
         for (auto base : {link(v4(tcp("GET / HTTP/1.1\r\n")), dlt), link(v6(tcp()), dlt)}) {
             for (std::size_t i = 0; i < base.size(); ++i) {
@@ -187,7 +187,7 @@ void dns_detection() {
         CHECK(parse(v4(udp(Bytes(response.begin(), response.begin() + n)), 17)).protocol != "DNS");
     }
     auto invalid = response; invalid[query.size() + 1] = uint8_t(query.size());
-    CHECK(parse(v4(udp(invalid), 17)).protocol == "UDP"); // self pointer
+    CHECK(parse(v4(udp(invalid), 17)).protocol == "UDP"); // 指向自身的指针
     invalid = query; invalid[12] = 0xff; CHECK(parse(v4(udp(invalid), 17)).protocol == "UDP");
     invalid = query; invalid[4] = 0xff; CHECK(parse(v4(udp(invalid), 17)).protocol == "UDP");
     Bytes prefixed(2); put16(prefixed, 0, unsigned(query.size())); prefixed.insert(prefixed.end(), query.begin(), query.end());

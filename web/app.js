@@ -32,7 +32,7 @@ import Split from './vendor/split.js';
   try {
     const stored = JSON.parse(localStorage.getItem('wirelens:panel-widths'));
     if (Array.isArray(stored) && stored.length === 2 && stored.every(n => Number.isFinite(n) && n >= 20 && n <= 80) && Math.abs(stored[0] + stored[1] - 100) < 0.1) savedSizes = stored;
-  } catch { /* Optional layout preferences must not prevent capture. */ }
+  } catch { /* 布局偏好读取失败不能影响抓包。 */ }
   const desktop = matchMedia('(min-width: 901px)');
   function saveSizes() {
     if (!panelSplit) return;
@@ -43,7 +43,7 @@ import Split from './vendor/split.js';
   }
   function destroySplit() {
     if (!panelSplit) return;
-    // Split.js destroy() does not stop an active drag. End it before teardown.
+    // Split.js 的 destroy() 不会结束正在进行的拖动，销毁前先停止拖动。
     window.dispatchEvent(new MouseEvent('mouseup', { button: 0 }));
     window.dispatchEvent(new Event('touchcancel'));
     saveSizes(); panelSplit.destroy(); panelSplit = null;
@@ -114,7 +114,7 @@ import Split from './vendor/split.js';
         headers: { ...(model.token ? { 'X-Capture-Token': model.token } : {}), ...options.headers } });
       if (!response.ok) {
         let reason = `Request failed (${response.status})`;
-        try { const body = await response.json(); if (body.error) reason = String(body.error); } catch { /* Preserve HTTP status. */ }
+        try { const body = await response.json(); if (body.error) reason = String(body.error); } catch { /* 保留 HTTP 状态码。 */ }
         const error = new Error(reason); error.status = response.status; throw error;
       }
       return options.blob ? await response.blob() : response.status === 204 ? null : await response.json();
@@ -143,7 +143,6 @@ import Split from './vendor/split.js';
   }
   function updateCount() {
 
-    $('visible-count').textContent = `${number(model.packets.size)} packets`;
     $('empty').hidden = model.packets.size > 0;
     if (!model.packets.size) {
       const filtered = model.protocol !== 'ALL' || model.search || model.flow || model.timeRange;
@@ -164,7 +163,7 @@ import Split from './vendor/split.js';
     $('state').textContent = names[data.state] || 'Unknown state'; $('state').dataset.state = data.state;
     for (const key of ['retained', 'received', 'evicted']) $(key).textContent = number(data[key]);
     $('bytes').textContent = bytes(data.bytes);
-    $('dropped').textContent = data.stats?.supported ? `${number(data.stats.dropped)} / Interface ${data.stats.interface_dropped == null ? 'N/A' : number(data.stats.interface_dropped)}` : 'N/A';
+    $('dropped').textContent = data.stats?.supported ? number(data.stats.dropped) : 'N/A';
     $('status-note').textContent = data.interface ? `${data.interface} · ${data.effective_filter || data.filter || 'No capture filter'}` : 'Local capture service';
     if (data.error) message(String(data.error));
     if ((data.state === 'running' || firstStatus) && interfaces.has(data.interface) && $('interface').value !== data.interface) {
@@ -248,6 +247,7 @@ import Split from './vendor/split.js';
     if (data.gap) { $('gap').hidden = false; $('gap').textContent = 'Older packets were evicted. The list now continues from the earliest retained packet.'; }
     model.cursor = data.cursor ?? model.cursor;
   }
+  // 定期读取捕获状态和新数据包，再更新列表与时间图。
   async function poll() {
     if (!model.ready || model.polling || document.hidden) return;
     model.polling = true;
@@ -302,7 +302,7 @@ import Split from './vendor/split.js';
     }
     if (searchInvalid) { searchInvalid = false; message(''); }
     $('search').removeAttribute('aria-invalid');
-    // Invalidate an outstanding query immediately, before the debounce expires.
+    // 防抖等待期间立即使之前的查询失效。
     model.epoch++; clearTimeout(searchTimer);
     searchTimer = setTimeout(() => { model.search = value; filterChanged(); }, 250);
   });
@@ -413,6 +413,7 @@ import Split from './vendor/split.js';
   $('follow').addEventListener('click', () => { if (model.detail?.flow_id) setFlow(model.detail.flow_id); });
   $('clear-flow').addEventListener('click', () => setFlow(''));
   $('close-flows').addEventListener('click', () => $('flows-dialog').close());
+  // 展示请求、响应和抓包时间；点击包号可查看原始数据。
   function renderHttpAnalysis(output, data) {
     const states = {
       complete: 'All retained HTTP messages in this stream were paired.',
@@ -527,7 +528,7 @@ import Split from './vendor/split.js';
           } catch (error) { output.textContent = `Could not analyze HTTP: ${error.message}`; }
           finally { analysis.disabled = false; }
         });
-        if (!flow.processes?.length) entry.append(el('small', 'Process unavailable: it may have exited, the connection was too short, or access was denied.', 'placeholder'));
+        if (!flow.processes?.length) entry.append(el('small', '进程未知', 'placeholder'));
         for (const owner of flow.processes || []) {
           const process = el('button', `${owner.name} · PID ${owner.pid} · Show all TCP streams for this process`);
           process.type = 'button'; process.style.margin = '3px 8px';
@@ -544,6 +545,7 @@ import Split from './vendor/split.js';
     } catch (error) { $('flows').replaceChildren(el('p', `Could not load streams: ${error.message}`, 'placeholder')); }
     finally { flowsBusy = false; $('flows-button').disabled = false; }
   });
+  // 初始化会话令牌、接口列表和定时刷新。
   async function initialize() {
     try {
       const session = await api('/session');

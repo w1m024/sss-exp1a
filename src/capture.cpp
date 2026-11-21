@@ -159,6 +159,7 @@ void Capture::stop() {
     }
     if (reader_.joinable()) reader_.join();
 }
+// 接收辅助进程的消息，再解析并保存数据包。
 void Capture::receive(int fd, pid_t pid) {
     std::string failure;
     try {
@@ -207,6 +208,7 @@ std::size_t Capture::memory_cost(const Packet& p) {
     for (const auto& owner : p.processes) cost += owner.name.capacity() + owner.start_ticks.capacity() + 64;
     return cost;
 }
+// 为 TCP 包归组会话，并限制保留的数据量。
 void Capture::add_packet(Packet packet) {
     auto owners = packet.transport == "TCP" && !packet.fragmented && !packet.malformed
         ? process_tracker_.lookup(packet.source, packet.source_port, packet.destination, packet.destination_port)
@@ -361,7 +363,7 @@ std::string Capture::timeline_json(uint64_t after, const std::string& protocol,
         selected.push_back(&p);
         bytes += p.wire_length;
     }
-    // Unsigned subtraction also handles timestamps spanning the signed zero boundary.
+    // 使用无符号减法处理跨越有符号零点的时间戳。
     uint64_t span = uint64_t(end) - uint64_t(start);
     if (!selected.empty() && span < 1000) {
         if (start > std::numeric_limits<int64_t>::max() - 1000)
@@ -374,7 +376,7 @@ std::string Capture::timeline_json(uint64_t after, const std::string& protocol,
         << ",\"latest_id\":" << next_id_ - 1 << ",\"matched\":" << selected.size() << ",\"bytes\":" << bytes
         << ",\"start_us\":" << start << ",\"end_us\":" << end << ",\"bins\":[";
     if (!selected.empty()) {
-        // floor(span * i / bins), without overflowing the multiplication.
+        // 计算 floor(span * i / bins)，避免乘法溢出。
         auto offset = [&](std::size_t i) { return span / bins * i + (span % bins) * i / bins; };
         std::vector<uint64_t> counts(bins), sizes(bins);
         for (const auto* p : selected) {
@@ -445,6 +447,7 @@ std::string Capture::flows_json() const {
     }
     return result + "]}";
 }
+// 使用仍保留的会话数据重组并配对 HTTP 请求与响应。
 std::string Capture::http_exchanges_json(const std::string& flow) const {
     namespace http = http_stream;
     std::lock_guard<std::mutex> lock(mutex_);

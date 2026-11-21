@@ -8,6 +8,7 @@
 
 namespace wirelens::http_stream {
 constexpr std::size_t limit = 256 * 1024;
+// 每个方向独立按 TCP 序号保存字节和来源包。
 struct Direction {
     std::optional<uint32_t> base;
     std::string bytes;
@@ -32,6 +33,7 @@ struct Direction {
             else if (bytes[index] != b) conflict = true;
         }
     }
+    // 遇到缺口时，只返回缺口之前连续的数据。
     std::string_view prefix() const {
         if (conflict) return {};
         return std::string_view(bytes).substr(0, std::find(source.begin(), source.end(), nullptr) - source.begin());

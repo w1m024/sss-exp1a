@@ -17,6 +17,7 @@ struct ProcessOwner {
     std::string name, start_ticks;
     std::string key() const { return std::to_string(pid) + ":" + start_ticks; }
 };
+// 通过 TCP 套接字 inode 和进程文件描述符做快照关联。
 class ProcessTracker {
     using Owners = std::vector<ProcessOwner>;
     std::map<std::string, Owners> sockets_;
@@ -29,7 +30,7 @@ class ProcessTracker {
         if (colon == std::string::npos || colon != (family == AF_INET ? 8u : 32u)) return {};
         unsigned char bytes[16] = {};
         try {
-            // proc tcp addresses use native-endian 32-bit words, including IPv6.
+            // proc 中的 TCP 地址按本机字节序的 32 位字存储，IPv6 也一样。
             for (std::size_t i = 0; i < colon; i += 8) {
                 auto word = uint32_t(std::stoul(value.substr(i, 8), nullptr, 16));
                 for (unsigned j = 0; j < 4; ++j) bytes[i / 2 + j] = uint8_t(word >> (8 * j));
@@ -69,7 +70,7 @@ public:
             if (++processes > 32768 || descriptors > 131072) break;
             auto id = entry.path().filename().string();
             if (id.empty() || id.find_first_not_of("0123456789") != std::string::npos) continue;
-            // Ordinary-user mode deliberately avoids privileges for other users.
+            // 普通用户模式下只查看当前用户的进程。
             std::ifstream status(entry.path() / "status"); std::string line; unsigned uid = ~0u;
             while (std::getline(status, line)) if (line.rfind("Uid:", 0) == 0) { std::istringstream(line.substr(4)) >> uid; break; }
             if (uid != getuid()) continue;

@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 namespace wirelens::ipc {
-// All integers, including the header, are unsigned big endian.
+// 所有整数（包括消息头）均为无符号大端序。
 inline constexpr uint32_t magic = 0x574c5043; // WLPC
 inline constexpr uint32_t max_payload = 65536 + 64;
 enum Type : uint32_t { Ready = 1, Packet = 2, Stats = 3, Error = 4 };
@@ -61,7 +61,7 @@ inline bool read_message(int fd, Message& m) {
 inline bool write_message(int fd, Type t, const std::vector<uint8_t>& payload) {
     if (payload.size() > max_payload || t < Ready || t > Error)
         throw std::runtime_error("IPC invalid outgoing frame");
-    // Block SIGPIPE only in this thread; preserve preexisting pending signals.
+    // 只在当前线程屏蔽 SIGPIPE，保留原有待处理信号。
     sigset_t mask, old, pending;
     sigemptyset(&mask); sigaddset(&mask, SIGPIPE);
     if (pthread_sigmask(SIG_BLOCK, &mask, &old) != 0)
@@ -70,7 +70,7 @@ inline bool write_message(int fd, Type t, const std::vector<uint8_t>& payload) {
     const bool was_pending = sigismember(&pending, SIGPIPE) == 1;
     bool ok = true;
     int failure = 0;
-    // No allocations while the signal mask is changed.
+    // 信号屏蔽期间不分配内存。
     uint8_t header[12];
     const uint32_t fields[] = {magic, static_cast<uint32_t>(t), static_cast<uint32_t>(payload.size())};
     for (size_t i = 0; i < 3; ++i)

@@ -51,10 +51,10 @@ def main():
         filtered = subprocess.check_output([args.tshark, '-n', '-X', 'lua_script:' + str(plugin), '-r', str(capture),
                                             '-Y', 'dns_analysis.long_label == 1', '-T', 'fields', '-e', 'frame.number'], text=True)
         assert filtered.strip() == '3', filtered
-        # Disabling a threshold must change the actual analysis, not only its label.
+        # 调整阈值必须改变实际分析结果。
         overridden = subprocess.check_output(command + ['-o', 'dns_analysis.long_label:50'], text=True)
         assert list(csv.reader(io.StringIO(overridden), delimiter='\t'))[2][4] == '0', overridden
-        # The postdissector must also see a DNS message split across TCP segments.
+        # 后置解析器还应能读取跨 TCP 段的 DNS 消息。
         dns = frame('split.example.com')[42:]
         payload = struct.pack('!H', len(dns)) + dns
         def tcp(sequence, acknowledgment, flags, body=b'', reverse=False):

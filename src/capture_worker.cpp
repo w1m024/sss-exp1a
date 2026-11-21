@@ -15,7 +15,7 @@ void stop(int) { stopping = 1; }
 using Devices = std::unique_ptr<pcap_if_t, decltype(&pcap_freealldevs)>;
 using Capture = std::unique_ptr<pcap_t, decltype(&pcap_close)>;
 bool error(const char* text) {
-    // Use fixed diagnostics: filter expressions and packet data never reach stderr.
+    // 使用固定错误信息，避免将过滤表达式和包内容写入 stderr。
     std::string s(text);
     if (s.size() > 4096) s.resize(4096);
     return wirelens::ipc::write_message(STDOUT_FILENO, wirelens::ipc::Error,
@@ -34,6 +34,7 @@ int main(int argc, char** argv) {
         auto fail = [&](const char* message) { if (capturing) error(message); else std::cerr << message << '\n'; return 1; };
         if (capturing && std::strlen(argv[3]) > 1024) return fail("Filter exceeds 1024 bytes");
         char errbuf[PCAP_ERRBUF_SIZE]{};
+        // 查询 libpcap 当前可使用的捕获接口。
         pcap_if_t* raw = nullptr;
         if (pcap_findalldevs(&raw, errbuf) != 0) return fail("Cannot enumerate capture interfaces");
         Devices devices(raw, pcap_freealldevs);
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
         sigemptyset(&action.sa_mask);
         if (sigaction(SIGTERM, &action, nullptr) || sigaction(SIGINT, &action, nullptr))
             return fail("Cannot install signal handlers");
+        // 打开选中的接口，后续编译并应用 BPF 过滤条件。
         Capture capture(pcap_open_live(argv[2], 65535, 0, 100, errbuf), pcap_close);
         if (!capture) return fail("Cannot open capture interface (CAP_NET_RAW required)");
         bpf_program program{};
@@ -100,10 +102,11 @@ int main(int argc, char** argv) {
         const int fd = pcap_get_selectable_fd(capture.get());
         int result = 0;
         while (!stopping) {
-            // Bounded batches keep signals and statistics responsive under heavy traffic.
+            // 限制每批处理数量，确保高流量下仍能及时处理信号和统计。
             for (int i = 0; i < 64 && !stopping; ++i) {
                 pcap_pkthdr* h = nullptr;
                 const u_char* bytes = nullptr;
+                // 读取原始包，再将时间、长度和字节交给服务进程。
                 const int n = pcap_next_ex(capture.get(), &h, &bytes);
                 if (n == 0) break;
                 if (n == -2) { stopping = 1; break; }

@@ -79,7 +79,7 @@ int main() {
         }
         {
             Pipe p; close(p.f[0]); p.f[0] = -1;
-            check(!write_message(p.f[1], Packet, {})); // Must survive SIGPIPE.
+            check(!write_message(p.f[1], Packet, {})); // 必须能处理 SIGPIPE。
         }
         {
             bool threw = false;
