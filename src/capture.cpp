@@ -460,17 +460,57 @@ std::string Capture::http_exchanges_json(const std::string& flow) const {
         client = source;
         directions[0].base = p.tcp_sequence + 1;
     }
-    if (client.empty()) return "{\"state\":\"missing_handshake\",\"exchanges\":[]}";
-    for (const auto& p : packets_) if (p.flow_id == flow && (p.tcp_flag_bits & 0x12) == 0x12 &&
+    const bool client_known = !client.empty();
+    if (!client_known) for (const auto& p : packets_) if (p.flow_id == flow && p.tcp_payload_size) {
+        client = endpoint(p.source, p.source_port);
+        break;
+    }
+    if (client_known) for (const auto& p : packets_) if (p.flow_id == flow && (p.tcp_flag_bits & 0x12) == 0x12 &&
         endpoint(p.source, p.source_port) != client && p.tcp_ack == *directions[0].base) {
         directions[1].base = p.tcp_sequence + 1;
         break;
     }
-    if (!directions[1].base) return "{\"state\":\"missing_handshake\",\"exchanges\":[]}";
+    const bool partial = !directions[0].base || !directions[1].base;
+    if (partial) {
+        const std::array<bool, 2> infer{!directions[0].base, !directions[1].base};
+        // 先确定每个方向最早的可见载荷，再写入字节，避免乱序扩大缺口。
+        for (const auto& p : packets_) if (p.flow_id == flow && p.tcp_payload_size) {
+            const auto side = endpoint(p.source, p.source_port) == client ? 0 : 1;
+            if (!infer[side]) continue;
+            auto& base = directions[side].base;
+            const uint32_t sequence = p.tcp_sequence + ((p.tcp_flag_bits & 2) ? 1 : 0);
+            if (!base || (*base - sequence < http::limit)) base = sequence;
+        }
+    }
+    const Packet* reset = nullptr;
     for (const auto& p : packets_) if (p.flow_id == flow) {
+        if (!reset && (p.tcp_flag_bits & 4)) reset = &p;
         directions[endpoint(p.source, p.source_port) == client ? 0 : 1].append(p);
     }
+    auto closing_packet = [&](unsigned side, std::size_t size) -> const Packet* {
+        const auto* fin = directions[side].closing_packet(size);
+        return fin && (!reset || fin->id < reset->id) ? fin : nullptr;
+    };
+    if (partial) {
+        // 只从连续数据的开头识别消息，避免把正文里的文本当成新请求。
+        auto looks_http = [&](unsigned side) {
+            const char* ignored = nullptr;
+            const auto req = http::parse(directions[side].prefix(), 0, false, ignored);
+            if (!req || req->method == "CONNECT") return false;
+            const auto response = directions[1 - side].prefix();
+            const auto res = http::parse(response, 0, true, ignored, req->method,
+                closing_packet(1 - side, response.size()) != nullptr);
+            return res && res->status != 101 &&
+                directions[side].source[0]->timestamp_us <= directions[1 - side].source[0]->timestamp_us;
+        };
+        const bool forward = looks_http(0), reverse = !client_known && looks_http(1);
+        if (forward == reverse) {
+            return "{\"state\":\"missing_handshake\",\"partial_capture\":true,\"exchanges\":[]}";
+        }
+        if (reverse) std::swap(directions[0], directions[1]);
+    }
     const auto request = directions[0].prefix(), response = directions[1].prefix();
+    const auto* fin = closing_packet(1, response.size());
     std::string result = "[";
     std::size_t a = 0, b = 0;
     unsigned count = 0;
@@ -485,21 +525,24 @@ std::string Capture::http_exchanges_json(const std::string& flow) const {
         if (!req) break;
         if (req->method == "CONNECT") { issue = "unsupported_framing"; break; }
         auto next = b;
-        auto res = http::parse(response, next, true, issue, req->method);
+        auto res = http::parse(response, next, true, issue, req->method, fin != nullptr);
         while (res && res->status < 200 && res->status != 101) {
             next = res->end;
-            res = http::parse(response, next, true, issue, req->method);
+            res = http::parse(response, next, true, issue, req->method, fin != nullptr);
         }
         if (!res) break;
         if (res->status == 101) { issue = "unsupported_framing"; break; }
-        if (count) result += ',';
         const auto* first = directions[0].source[a];
         const auto* reply = directions[1].source[next];
+        if (partial && reply->timestamp_us < first->timestamp_us) { issue = "incomplete_message"; break; }
+        if (count) result += ',';
         const auto* last = directions[1].source[res->end - 1];
         auto completed = reply->timestamp_us;
         for (auto i = next; i < res->end; ++i) completed = std::max(completed, directions[1].source[i]->timestamp_us);
         result += "{\"request\":" + json_string(std::string(req->line)) + ",\"response\":" + json_string(std::string(res->line))
             + ",\"request_packet\":" + std::to_string(first->id) + ",\"response_packet\":" + std::to_string(reply->id);
+        if (std::string_view(res->framing) == "close-delimited")
+            completed = std::max(completed, fin->timestamp_us);
         result += ",\"method\":" + json_string(std::string(req->method)) + ",\"target\":" + json_string(std::string(req->target))
             + ",\"status\":" + std::to_string(res->status) + ",\"request_details\":" + metadata(*req)
             + ",\"response_details\":" + metadata(*res) + ",\"response_last_packet\":" + std::to_string(last->id)
@@ -508,6 +551,8 @@ std::string Capture::http_exchanges_json(const std::string& flow) const {
         if (reply->timestamp_us >= first->timestamp_us) {
             result += ",\"elapsed_us\":" + std::to_string(uint64_t(reply->timestamp_us) - uint64_t(first->timestamp_us));
         }
+        if (std::string_view(res->framing) == "close-delimited")
+            result += ",\"response_fin_packet\":" + std::to_string(fin->id);
         result += '}';
         a = req->end;
         b = res->end;
@@ -522,6 +567,7 @@ std::string Capture::http_exchanges_json(const std::string& flow) const {
         (!directions[1].conflict && response.size() < directions[1].bytes.size())) state = "missing_segments";
     if (directions[0].conflict || directions[1].conflict) state = "conflicting_overlap";
     return "{\"state\":" + json_string(state) +
+        ",\"partial_capture\":" + (partial ? "true" : "false") +
         ",\"exchanges\":" + result + "]}";
 }
 std::string Capture::export_pcap() const {

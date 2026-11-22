@@ -13,12 +13,21 @@ struct Direction {
     std::optional<uint32_t> base;
     std::string bytes;
     std::vector<const Packet*> source;
+    std::optional<uint32_t> fin_offset;
+    const Packet* fin = nullptr;
+    bool conflicting_fin = false;
     bool limited = false, conflict = false, truncated = false;
 
     void append(const Packet& p) {
         truncated |= p.truncated;
-        if (!base || !p.tcp_payload_size) return;
+        if (!base) return;
         uint32_t offset = p.tcp_sequence + ((p.tcp_flag_bits & 2) ? 1 : 0) - *base;
+        if ((p.tcp_flag_bits & 5) == 1 && !p.truncated) {
+            const uint32_t end = offset + p.tcp_payload_size;
+            if (fin_offset && *fin_offset != end) conflicting_fin = true;
+            if (!fin) { fin_offset = end; fin = &p; }
+        }
+        if (!p.tcp_payload_size) return;
         if (offset >= limit) { limited = true; return; }
         const auto size = std::min(p.tcp_payload_size, limit - offset);
         limited |= size != p.tcp_payload_size;
@@ -32,6 +41,11 @@ struct Direction {
             if (!source[index]) { source[index] = &p; bytes[index] = b; }
             else if (bytes[index] != b) conflict = true;
         }
+    }
+    // FIN 的序号必须紧接完整载荷，才能用来确定正文结束位置。
+    const Packet* closing_packet(std::size_t prefix_size) const {
+        return fin_offset == prefix_size && bytes.size() == prefix_size &&
+            !limited && !conflict && !truncated && !conflicting_fin ? fin : nullptr;
     }
     // 遇到缺口时，只返回缺口之前连续的数据。
     std::string_view prefix() const {
@@ -96,7 +110,7 @@ inline bool chunks(std::string_view bytes, std::size_t pos, Message& m, const ch
         pos += 2;
     }
 }
-inline std::optional<Message> parse(std::string_view bytes, std::size_t at, bool response, const char*& issue, std::string_view method = {}) {
+inline std::optional<Message> parse(std::string_view bytes, std::size_t at, bool response, const char*& issue, std::string_view method = {}, bool closed = false) {
     issue = "incomplete_message";
     if (at >= bytes.size()) return {};
     auto header = bytes.substr(at, 32768);
@@ -165,7 +179,13 @@ inline std::optional<Message> parse(std::string_view bytes, std::size_t at, bool
         if (!chunks(bytes, payload, m, issue)) return {};
         return m;
     }
-    if (!no_body && response && !length) { issue = "unsupported_framing"; return {}; }
+    if (!no_body && response && !length) {
+        if (!closed) { issue = "awaiting_close"; return {}; }
+        m.framing = "close-delimited";
+        m.body_size = bytes.size() - payload;
+        m.end = bytes.size();
+        return m;
+    }
     m.body_size = no_body ? 0 : length.value_or(0);
     if (!no_body && length) m.framing = "content-length";
     if (m.body_size > bytes.size()-payload) { issue = "incomplete_message"; return {}; }

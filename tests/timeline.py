@@ -35,8 +35,11 @@ def fixtures(mode):
             response = b'HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n' + chunk
             if mode == 'http-chunked':
                 response += b'HTTP/1.1 200 OK\r\nContent-Length: 99\r\n\r\n'
+        if mode.startswith('http-close-'):
+            request = request.split(b'HEAD')[0]
+            response = b'HTTP/1.0 200 OK\r\n\r\nclose-delimited'
         if mode == 'http-unsupported':
-            response = b'HTTP/1.1 200 OK\r\n\r\nclose-delimited'
+            response = b'HTTP/1.1 200 OK\r\nTransfer-Encoding: custom\r\n\r\nencoded'
         if mode == 'http-limit':
             response = b'HTTP/1.1 200 OK\r\nX-Long: ' + b'x' * 33000
         frames = [ethernet_tcp(100, 2), ethernet_tcp(200, 18, True, ack=101),
@@ -46,8 +49,35 @@ def fixtures(mode):
         if mode == 'http-conflict':
             frames.append(ethernet_tcp(101, body=b'X'))
         step = 8192 if mode == 'http-limit' else 18
+        if mode.startswith('http-close-'):
+            step = 20
         frames += [ethernet_tcp(201 + i, reverse=True, body=response[i:i+step])
                    for i in range(0, len(response), step)]
+        if mode.startswith('http-close-'):
+            fin_seq = 201 + len(response)
+            if mode == 'http-close-gap':
+                frames.pop()
+            if mode == 'http-close-reset':
+                frames.append(ethernet_tcp(fin_seq, 20, True))
+            if mode == 'http-close-client':
+                frames.append(ethernet_tcp(101 + len(request), 17))
+            elif mode == 'http-close-fin-data':
+                frames[-1] = ethernet_tcp(201 + step, 17, True, body=response[step:])
+            elif mode != 'http-close-open':
+                frames.append(ethernet_tcp(fin_seq, 17, True))
+            if mode == 'http-close-early-fin':
+                frames[-2], frames[-1] = frames[-1], frames[-2]
+            if mode == 'http-close-midstream':
+                frames = frames[2:]
+        if mode == 'http-midstream':
+            frames = frames[2:]
+        elif mode == 'http-midstream-syn':
+            del frames[1]
+        elif mode == 'http-midstream-response-first':
+            frames = frames[5:6] + frames[2:5] + frames[6:]
+            # 先观察到响应时，不应把它配给稍后捕获的请求。
+        elif mode == 'http-midstream-body':
+            frames = [ethernet_tcp(91, body=b'body\r\n'), *frames[2:]]
         return [(BASE + i * 1000, len(frame) + (1 if mode == 'http-truncated' and i == len(frames)-1 else 0), frame)
                 for i, frame in enumerate(frames)]
     if mode == "empty":
@@ -217,12 +247,16 @@ def run(s):
                       'http-bad-chunk': 'invalid_framing', 'http-short-chunk': 'incomplete_message',
                       'http-unsupported': 'unsupported_framing', 'http-limit': 'analysis_limit',
                       'http-truncated': 'truncated_capture'}
-    for mode in ('http-complete', 'http-chunked', *failure_states):
+    failure_states.update({'http-midstream-response-first': 'missing_handshake',
+                           'http-midstream-body': 'missing_handshake'})
+    success_modes = ('http-complete', 'http-chunked', 'http-midstream', 'http-midstream-syn')
+    for mode in (*success_modes, *failure_states):
         s.replay(mode)
         flow = s.request('/flows')['flows'][0]['id']
         result = s.get('/flows/http', flow=flow)
-        if mode in ('http-complete', 'http-chunked'):
+        if mode in success_modes:
             require(result['state'] == 'complete', result)
+            require(result['partial_capture'] == mode.startswith('http-midstream'), result)
             exchanges = result['exchanges']
             require([e['request'] for e in exchanges] == ['GET /index HTTP/1.1', 'HEAD /next HTTP/1.1'], result)
             require(all(e['response'] == 'HTTP/1.1 200 OK' for e in exchanges), result)
@@ -241,6 +275,27 @@ def run(s):
             require(result['state'] == failure_states[mode], result)
             if mode != 'http-truncated':
                 require(result['exchanges'] == [], result)
+    for mode, state in {
+        'http-close-fin': 'complete', 'http-close-early-fin': 'complete',
+        'http-close-midstream': 'complete', 'http-close-fin-data': 'complete',
+        'http-close-gap': 'awaiting_close', 'http-close-open': 'awaiting_close',
+        'http-close-reset': 'awaiting_close', 'http-close-client': 'awaiting_close',
+    }.items():
+        s.replay(mode)
+        flow = s.request('/flows')['flows'][0]['id']
+        result = s.get('/flows/http', flow=flow)
+        require(result['state'] == state, result)
+        require(len(result['exchanges']) == int(state == 'complete'), result)
+        if state == 'complete':
+            exchange = result['exchanges'][0]
+            require(exchange['response_details']['framing'] == 'close-delimited', result)
+            require(exchange['response_details']['body_bytes'] == len(b'close-delimited'), result)
+            require(result['partial_capture'] == mode.endswith('midstream'), result)
+            fin = s.request('/packets/' + str(exchange['response_fin_packet']))
+            last = s.request('/packets/' + str(exchange['response_last_packet']))
+            require((fin['id'] == last['id']) == mode.endswith('fin-data'), result)
+            require(exchange['response_complete_us'] == max(fin['timestamp_us'], last['timestamp_us']), result)
+    print('PASS HTTP close-delimited framing, FIN, RST, missing bytes, and partial capture')
     print('PASS HTTP reassembly, out-of-order segments, retransmission, gap, conflicting overlap, fixed body, HEAD and packet provenance')
 
 

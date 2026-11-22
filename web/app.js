@@ -416,19 +416,25 @@ import Split from './vendor/split.js';
   // 展示请求、响应和抓包时间；点击包号可查看原始数据。
   function renderHttpAnalysis(output, data) {
     const states = {
-      complete: 'All retained HTTP messages in this stream were paired.',
+      complete: data.partial_capture
+        ? 'Complete HTTP exchanges found in the retained data.'
+        : 'All retained HTTP messages in this stream were paired.',
       no_messages: 'No captured application data.',
-      missing_handshake: 'The TCP handshake was not captured or is no longer retained.',
+      missing_handshake: 'The TCP handshake is unavailable and no complete HTTP exchange was identified at the start of the retained stream.',
       uncertain_direction: 'Could not determine the client direction.',
       missing_segments: 'TCP sequence gap. Analysis stopped before the missing bytes.',
       conflicting_overlap: 'Overlapping TCP segments contain different bytes.',
       truncated_capture: 'One or more packets were truncated during capture.',
       analysis_limit: 'Analysis limit reached.',
       invalid_framing: 'Invalid or unrecognized HTTP message framing.',
+      awaiting_close: 'Cannot confirm the end of the HTTP response without a valid server FIN.',
       unsupported_framing: 'Unsupported framing, tunnel, or protocol upgrade.',
       incomplete_message: 'The next request or response is incomplete.',
     };
     output.replaceChildren(el('p', states[data.state] || 'Analysis unavailable.', 'placeholder'));
+    if (data.partial_capture && data.exchanges.length) {
+      output.prepend(el('p', 'Partial capture: the TCP handshake is unavailable or incomplete. HTTP pairs are inferred from retained data.', 'placeholder'));
+    }
     const exchanges = data.exchanges;
     if (!exchanges.length) return;
     const validTiming = exchange => exchange.response_us >= exchange.request_us &&
@@ -462,6 +468,13 @@ import Split from './vendor/split.js';
       if (exchange.response_last_packet !== exchange.response_packet) {
         const id = exchange.response_last_packet;
         const jump = el('button', `Last response byte · #${id}`, 'http-packet-link');
+        jump.type = 'button';
+        jump.addEventListener('click', () => { $('flows-dialog').close(); void selectPacket(id, true); });
+        details.append(jump);
+      }
+      if (exchange.response_fin_packet) {
+        const id = exchange.response_fin_packet;
+        const jump = el('button', `Server FIN · #${id}`, 'http-packet-link');
         jump.type = 'button';
         jump.addEventListener('click', () => { $('flows-dialog').close(); void selectPacket(id, true); });
         details.append(jump);
