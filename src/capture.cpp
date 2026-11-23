@@ -137,6 +137,7 @@ void Capture::start(const std::string& device, const std::string& filter, const 
             std::lock_guard<std::mutex> lock(mutex_);
             datalink_ = int(ipc::get_u32(message.payload, 0));
             packets_.clear(); active_flows_.clear(); process_tracker_.reset();
+            pending_owner_events_.clear();
             if (owner_events_.is_open()) {
                 owner_events_.clear();
                 owner_events_.seekg(0, std::ios::end);
@@ -249,7 +250,6 @@ void Capture::add_packet(Packet packet) {
                 active_flows_.erase(oldest);
             }
             Flow f; f.id = "tcp-" + std::to_string(next_flow_++);
-            f.first = packet.timestamp_us;
             active_flows_[key] = f;
         }
         Flow& f = active_flows_.at(key);
@@ -437,8 +437,14 @@ std::string Capture::packet_json(uint64_t id) {
 // 查询时补录事件，覆盖最后一个数据包之后才送达的事件。
 void Capture::refresh_owner_events() {
     if (!owner_events_.is_open() || packets_.empty()) return;
-    const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    using namespace std::chrono;
+    constexpr int64_t clock_slack_us = 2000;
+    constexpr int64_t late_accept_us = 250000;
+    const auto now = steady_clock::now();
+    auto tuple = [](const std::string& local, unsigned local_port, const std::string& remote, unsigned remote_port) {
+        const auto a = endpoint(local, local_port), b = endpoint(remote, remote_port);
+        return a < b ? a + "|" + b : b + "|" + a;
+    };
     owner_events_.clear();
     for (unsigned i = 0; i < 256; ++i) {
         const auto offset = owner_events_.tellg();
@@ -454,31 +460,88 @@ void Capture::refresh_owner_events() {
         unsigned local_port, remote_port;
         std::string local, remote;
         if (!(row >> when >> owner.uid >> owner.pid >> owner.start_ticks >>
-              local >> local_port >> remote >> remote_port) || owner.uid != getuid()) continue;
+              local >> local_port >> remote >> remote_port) || owner.uid != getuid() ||
+            when < 0 || !owner.pid || !local_port || local_port > 65535 ||
+            !remote_port || remote_port > 65535) continue;
         std::getline(row >> std::ws, owner.name);
-        const auto a = endpoint(local, local_port), b = endpoint(remote, remote_port);
-        auto found = active_flows_.find(a < b ? a + "|" + b : b + "|" + a);
-        if (found == active_flows_.end()) {
-            // 等待 libpcap 交付对应连接的首包。
-            if (state_ == "running" && when > now - 250000) {
-                owner_events_.seekg(offset);
-                break;
-            }
-            continue;
-        }
-        auto& flow = found->second;
-        if ((!flow.have_syn_a && !flow.have_syn_b) || when < flow.first - 2000 ||
-            when > flow.last + 250000 || flow.processes.size() >= 32) continue;
-        if (std::any_of(flow.processes.begin(), flow.processes.end(),
-            [&](const auto& p) { return p.key() == owner.key(); })) continue;
-        flow.processes.push_back(owner);
-        for (auto& packet : packets_) if (packet.flow_id == flow.id) {
-            bytes_ -= memory_cost(packet);
-            packet.processes = flow.processes;
-            bytes_ += memory_cost(packet);
-        }
-        trim_packets();
+        if (pending_owner_events_.size() == 4096) pending_owner_events_.pop_front();
+        pending_owner_events_.push_back({when, tuple(local, local_port, remote, remote_port), std::move(owner), now});
     }
+    if (pending_owner_events_.empty() ||
+        (state_ == "running" && now - pending_owner_events_.front().received < milliseconds(250))) return;
+
+    struct Lifetime {
+        std::optional<int64_t> syn;
+        int64_t first = 0, last = 0;
+        bool reset = false, fin_a = false, fin_b = false;
+        std::vector<ProcessOwner> owners;
+    };
+    std::map<std::string, std::map<std::string, Lifetime>> candidates;
+    for (const auto& event : pending_owner_events_) candidates.try_emplace(event.tuple);
+    for (const auto& packet : packets_) {
+        if (packet.flow_id.empty()) continue;
+        auto found = candidates.find(tuple(packet.source, packet.source_port, packet.destination, packet.destination_port));
+        if (found == candidates.end()) continue;
+        auto& generations = found->second;
+        auto [it, inserted] = generations.try_emplace(packet.flow_id);
+        auto& life = it->second;
+        if (inserted) {
+            life.first = life.last = packet.timestamp_us;
+            life.owners = packet.processes;
+        }
+        life.first = std::min(life.first, packet.timestamp_us);
+        life.last = std::max(life.last, packet.timestamp_us);
+        if ((packet.tcp_flag_bits & 0x12) == 2 && (!life.syn || packet.timestamp_us < *life.syn))
+            life.syn = packet.timestamp_us;
+        if (packet.tcp_flag_bits & 4) life.reset = true;
+        if (packet.tcp_flag_bits & 1) {
+            const auto local = endpoint(packet.source, packet.source_port);
+            const auto remote = endpoint(packet.destination, packet.destination_port);
+            (local <= remote ? life.fin_a : life.fin_b) = true;
+        }
+    }
+
+    std::map<std::string, const std::vector<ProcessOwner>*> changed;
+    for (auto event = pending_owner_events_.begin(); event != pending_owner_events_.end();) {
+        // 给 libpcap 留出交付后续 SYN 的时间，避免事件被提前关联到复用端口的旧会话。
+        if (state_ == "running" && now - event->received < milliseconds(250)) {
+            break;
+        }
+        const auto& generations = candidates.at(event->tuple);
+        const std::string* id = nullptr;
+        const Lifetime* selected = nullptr;
+        const Lifetime* next = nullptr;
+        for (const auto& [flow_id, life] : generations) {
+            if (life.first <= event->timestamp) {
+                if (!selected || life.first > selected->first) { id = &flow_id; selected = &life; }
+                else if (life.first == selected->first) id = nullptr;
+            } else if (!next || life.first < next->first) next = &life;
+        }
+        const bool near_reuse = next && next->first - event->timestamp <= clock_slack_us;
+        if (id && selected->syn && *selected->syn <= event->timestamp && !near_reuse) {
+            auto& life = candidates.at(event->tuple).at(*id);
+            const auto slack = life.reset || (life.fin_a && life.fin_b) ? clock_slack_us : late_accept_us;
+            if (event->timestamp - life.last <= slack && life.owners.size() < 32 &&
+                std::none_of(life.owners.begin(), life.owners.end(),
+                             [&](const auto& owner) { return owner.key() == event->owner.key(); })) {
+                life.owners.push_back(std::move(event->owner));
+                changed[*id] = &life.owners;
+                auto active = active_flows_.find(event->tuple);
+                if (active != active_flows_.end() && active->second.id == *id)
+                    active->second.processes = life.owners;
+            }
+        }
+        event = pending_owner_events_.erase(event);
+    }
+    if (changed.empty()) return;
+    for (auto& packet : packets_) {
+        auto found = changed.find(packet.flow_id);
+        if (found == changed.end()) continue;
+        bytes_ -= memory_cost(packet);
+        packet.processes = *found->second;
+        bytes_ += memory_cost(packet);
+    }
+    trim_packets();
 }
 std::string Capture::flows_json() {
     struct Summary { std::string a, b, state = "active"; uint64_t packets = 0, bytes = 0; int64_t start = 0, last = 0; bool fa = false, fb = false; std::vector<ProcessOwner> owners; };

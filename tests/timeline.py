@@ -25,6 +25,17 @@ BASE = 1700000000000000
 
 
 def fixtures(mode):
+    if mode == 'owner-reuse':
+        frames = [
+            (0, ethernet_tcp(100, 2)),
+            (3000, ethernet_tcp(200, 18, True, ack=101)),
+            (10000, ethernet_tcp(101, 4)),
+            (11000, ethernet_tcp(300, 2)),
+            (14000, ethernet_tcp(400, 18, True, ack=301)),
+            (15000, ethernet_tcp(301)),
+            (121000000, ethernet_tcp(900)),
+        ]
+        return [(BASE + offset, len(data), data) for offset, data in frames]
     if mode.startswith('http-'):
         request = b'GET /index HTTP/1.1\r\nHost: local.test\r\n\r\nHEAD /next HTTP/1.1\r\n\r\n'
         response = b'HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ntestHTTP/1.1 200 OK\r\nContent-Length: 99\r\n\r\n'
@@ -120,10 +131,13 @@ class TimelineService(Service):
             target = web / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("/* test asset */")
+        self.events = self.root / "owners"
+        self.events.touch()
         self.log = (self.root / "server.log").open("w+b")
         self.process = subprocess.Popen([str(self.args.server.resolve()), "--port", str(self.port),
             "--capture-helper", str(helper), "--web-dir", str(web), "--capacity", "1100"],
-            stdout=self.log, stderr=self.log, start_new_session=True)
+            stdout=self.log, stderr=self.log, start_new_session=True,
+            env={**os.environ, "WIRELENS_TCP_OWNER_EVENTS": str(self.events)})
 
         def ready():
             require(self.process.poll() is None, "Server exited during startup")
@@ -299,6 +313,43 @@ def run(s):
     print('PASS HTTP reassembly, out-of-order segments, retransmission, gap, conflicting overlap, fixed body, HEAD and packet provenance')
 
 
+def check_owner_associations(s):
+    s.replay('owner-reuse')
+    flows = {packet['timestamp_us'] - BASE: packet['flow_id'] for packet in s.all_packets()}
+    first, second, midstream = (flows[t] for t in (0, 11000, 121000000))
+    require(len({first, second, midstream}) == 3, flows)
+    expected = {(first, 5001), (first, 5002), (second, 5003), (second, 5004)}
+    events = [
+        (13200, 5003, False),  # New generation arrives before the delayed older events.
+        (500, 5001, False),
+        (3600, 5002, True),
+        (14500, 5004, True),
+        (10050, 5005, False),  # Too close to the next SYN to disambiguate.
+        (121001000, 5006, False),  # No retained SYN for this generation.
+        (500, 5007, False),  # Different port.
+        (900000, 5008, False),  # Outside the retained connection lifetime.
+        (500, 5001, False),  # Duplicate.
+    ]
+    with s.events.open('a') as log:
+        for offset, pid, reverse in events:
+            endpoint = '198.51.100.2 8081 192.0.2.1 12345' if reverse else '192.0.2.1 12345 198.51.100.2 8081'
+            if pid == 5007:
+                endpoint = endpoint.replace('8081', '8082')
+            log.write(f'{BASE + offset} {os.getuid()} {pid} 1 {endpoint} fixture\n')
+    actual = {(flow['id'], owner['pid']) for flow in s.request('/flows')['flows']
+              for owner in flow['processes']}
+    missed, incorrect = expected - actual, actual - expected
+    print(f'Association replay: matched={len(expected & actual)}/{len(expected)}, '
+          f'missed={len(missed)}, incorrect={len(incorrect)}')
+    require(not missed and not incorrect, (missed, incorrect))
+    for flow, pid in expected:
+        matches = s.all_packets(search=f'process:{pid}:1')
+        require({packet['flow_id'] for packet in matches} == {flow}, 'Matched process must filter only its flow')
+        check_timeline(s, matches, search=f'process:{pid}:1')
+    s.replay('owner-reuse')
+    require(not any(flow['processes'] for flow in s.request('/flows')['flows']), 'Events must not cross capture sessions')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", type=Path, default=Path("build/wirelens"))
@@ -310,6 +361,7 @@ def main():
         try:
             service.launch()
             run(service)
+            check_owner_associations(service)
         finally:
             service.close()
 

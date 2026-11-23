@@ -1,5 +1,6 @@
 #pragma once
 #include "packet.hpp"
+#include <chrono>
 #include <deque>
 #include <fstream>
 #include <map>
@@ -30,7 +31,7 @@ public:
 private:
     struct Flow {
         std::string id;
-        int64_t first = 0, last = 0;
+        int64_t last = 0;
         uint32_t syn_sequence_a = 0, syn_sequence_b = 0;
         bool have_syn_a = false, have_syn_b = false;
         bool fin_a = false, fin_b = false, reset = false;
@@ -59,7 +60,14 @@ private:
     std::deque<Packet> packets_;
     std::map<std::string, Flow> active_flows_;
     ProcessTracker process_tracker_;
+    struct OwnerEvent {
+        int64_t timestamp;
+        std::string tuple;
+        ProcessOwner owner;
+        std::chrono::steady_clock::time_point received;
+    };
     std::ifstream owner_events_;
+    std::deque<OwnerEvent> pending_owner_events_;
 };
 std::string interfaces_json();
 }

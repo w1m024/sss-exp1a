@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 
 from integration import Service, eventually, require
 
@@ -30,12 +31,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--helper', default='/opt/wirelens/libexec/wirelens-capture')
     parser.add_argument('--port', type=int, default=18895)
+    parser.add_argument('--rounds', type=int, default=1, help='Connections per IP family')
     args = parser.parse_args()
+    require(args.rounds > 0, 'rounds must be positive')
     args.server = str(Path('build/wirelens').resolve())
     require(os.environ.get('WIRELENS_TCP_OWNER_EVENTS'), 'Start the collector and set WIRELENS_TCP_OWNER_EVENTS')
+    expected_count = missed_count = incorrect_count = 0
     with Service(args, 5000) as service:
         service.start(f'tcp and not port {args.port}')
-        for version in ('4', '6'):
+        for version in ('4', '6') * args.rounds:
             # Pause the snapshot reader so it cannot observe either process alive.
             os.kill(service.process.pid, signal.SIGSTOP)
             try:
@@ -49,23 +53,38 @@ def main():
             finally:
                 os.kill(service.process.pid, signal.SIGCONT)
 
-            def attributed():
+            def observed():
                 rows = service.request('/api/flows')['flows']
-                for row in rows:
-                    owners = {p['pid']: p for p in row['processes']}
-                    if pids <= owners.keys():
-                        return row, owners
-                return None
+                # 确认本轮的服务端端口，再检查受测 PID 在所有会话中的归属。
+                matches = [row for row in rows if any(
+                    row[side].endswith(f':{port}') for side in ('endpoint_a', 'endpoint_b'))]
+                if len(matches) != 1:
+                    return None
+                flow = matches[0]
+                actual = {(row['id'], p['pid']) for row in rows
+                          for p in row['processes'] if p['pid'] in pids}
+                expected = {(flow['id'], pid) for pid in pids}
+                return flow, expected, actual
 
-            flow, owners = eventually(attributed, f'IPv{version} attribution after process exit')
-            for pid in pids:
-                owner = owners[pid]
+            flow, expected, actual = eventually(observed, f'IPv{version} flow')
+            # 给事件文件读取和待匹配队列留出时间。失败时仍统计缺失的关联。
+            deadline = time.monotonic() + 2
+            while not expected <= actual and time.monotonic() < deadline:
+                time.sleep(.05)
+                flow, expected, actual = observed()
+            expected_count += len(expected)
+            missed_count += len(expected - actual)
+            incorrect_count += len(actual - expected)
+            for owner in flow['processes']:
+                if owner['pid'] not in pids:
+                    continue
                 require(owner['uid'] == os.getuid() and owner['start_ticks'].isdigit(), 'owner identity')
                 packets = service.packets(search='process:' + owner['key'])['packets']
-                require({packet['flow_id'] for packet in packets} == {flow['id']}, 'process filter')
-                require(any(packet['source_port'] == port or packet['destination_port'] == port
-                            for packet in packets), 'endpoint identity')
+                require(flow['id'] in {packet['flow_id'] for packet in packets}, 'process filter')
         service.stop()
+    print(f'Live associations: matched={expected_count - missed_count}/{expected_count}, '
+          f'missed={missed_count}, incorrect={incorrect_count}')
+    require(not missed_count and not incorrect_count, 'unexpected live attribution errors')
     print('PASS eBPF IPv4/IPv6 short-lived connect and accept, process exit and API filtering')
 
 
