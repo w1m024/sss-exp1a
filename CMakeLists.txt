@@ -31,3 +31,24 @@ add_executable(ipc_tests tests/ipc_tests.cpp)
 target_include_directories(ipc_tests PRIVATE src)
 target_link_libraries(ipc_tests PRIVATE Threads::Threads)
 add_test(NAME capture_ipc COMMAND ipc_tests)
+
+option(WIRELENS_TCP_OWNER "Build the optional TCP owner probe" OFF)
+if(WIRELENS_TCP_OWNER)
+    find_program(BPF_CLANG clang)
+    if(NOT BPF_CLANG)
+        message(FATAL_ERROR "Clang is required for WIRELENS_TCP_OWNER")
+    endif()
+    pkg_check_modules(BPF REQUIRED IMPORTED_TARGET libbpf)
+    execute_process(COMMAND ${CMAKE_CXX_COMPILER} -dumpmachine
+                    OUTPUT_VARIABLE BPF_MULTIARCH OUTPUT_STRIP_TRAILING_WHITESPACE)
+    add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/tcp_owner.bpf.o
+        COMMAND ${BPF_CLANG} -Werror -O2 -g -target bpf -I/usr/include/${BPF_MULTIARCH}
+                -c ${CMAKE_CURRENT_SOURCE_DIR}/src/tcp_owner.bpf.c
+                -o ${CMAKE_CURRENT_BINARY_DIR}/tcp_owner.bpf.o
+        DEPENDS src/tcp_owner.bpf.c src/tcp_owner_event.h VERBATIM)
+    add_custom_target(tcp_owner_bpf DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/tcp_owner.bpf.o)
+    add_executable(wirelens-tcp-owner src/tcp_owner.cpp)
+    target_link_libraries(wirelens-tcp-owner PRIVATE PkgConfig::BPF)
+    target_compile_options(wirelens-tcp-owner PRIVATE -Wall -Wextra -Wpedantic)
+    add_dependencies(wirelens-tcp-owner tcp_owner_bpf)
+endif()

@@ -1,6 +1,7 @@
 #pragma once
 #include "packet.hpp"
 #include <deque>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <mutex>
@@ -19,17 +20,17 @@ public:
     std::string status_json() const;
     std::string packets_json(uint64_t after, const std::string& protocol,
                              const std::string& search, const std::string& flow,
-                             std::optional<int64_t> from_us = {}, std::optional<int64_t> to_us = {}) const;
+                             std::optional<int64_t> from_us = {}, std::optional<int64_t> to_us = {});
     std::string timeline_json(uint64_t after, const std::string& protocol,
-                              const std::string& search, const std::string& flow, std::size_t bins) const;
-    std::string packet_json(uint64_t id) const;
-    std::string flows_json() const;
+                              const std::string& search, const std::string& flow, std::size_t bins);
+    std::string packet_json(uint64_t id);
+    std::string flows_json();
     std::string http_exchanges_json(const std::string& flow) const;
     std::string export_pcap() const;
 private:
     struct Flow {
         std::string id;
-        int64_t last = 0;
+        int64_t first = 0, last = 0;
         uint32_t syn_sequence_a = 0, syn_sequence_b = 0;
         bool have_syn_a = false, have_syn_b = false;
         bool fin_a = false, fin_b = false, reset = false;
@@ -37,6 +38,8 @@ private:
     };
     void receive(int fd, pid_t pid);
     void add_packet(Packet packet);
+    void refresh_owner_events();
+    void trim_packets();
     static std::string packet_summary(const Packet& packet);
     static std::size_t memory_cost(const Packet& packet);
     std::string helper_;
@@ -56,6 +59,7 @@ private:
     std::deque<Packet> packets_;
     std::map<std::string, Flow> active_flows_;
     ProcessTracker process_tracker_;
+    std::ifstream owner_events_;
 };
 std::string interfaces_json();
 }

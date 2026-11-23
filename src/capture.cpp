@@ -15,6 +15,7 @@
 #include <cerrno>
 #include <cctype>
 #include <cstring>
+#include <cstdlib>
 #include <set>
 #include <limits>
 #include <stdexcept>
@@ -97,7 +98,12 @@ std::string interfaces_json() {
 }
 Capture::Capture(std::string helper, std::size_t capacity, std::size_t limit)
     : helper_(std::move(helper)), capacity_(std::max<std::size_t>(1, capacity)),
-      memory_limit_(std::max<std::size_t>(131072, limit)) {}
+      memory_limit_(std::max<std::size_t>(131072, limit)) {
+    if (const auto* path = std::getenv("WIRELENS_TCP_OWNER_EVENTS")) {
+        std::error_code error;
+        if (std::filesystem::is_regular_file(path, error)) owner_events_.open(path);
+    }
+}
 Capture::~Capture() { stop(); }
 void Capture::start(const std::string& device, const std::string& filter, const std::string& requested_filter) {
     std::lock_guard<std::mutex> operation(operation_);
@@ -131,6 +137,10 @@ void Capture::start(const std::string& device, const std::string& filter, const 
             std::lock_guard<std::mutex> lock(mutex_);
             datalink_ = int(ipc::get_u32(message.payload, 0));
             packets_.clear(); active_flows_.clear(); process_tracker_.reset();
+            if (owner_events_.is_open()) {
+                owner_events_.clear();
+                owner_events_.seekg(0, std::ios::end);
+            }
             bytes_ = 0; received_ = 0; evicted_ = 0;
             stats_supported_ = false; stats_received_ = dropped_ = interface_dropped_ = 0;
             device_ = device; filter_ = requested_filter; effective_filter_ = filter; error_.clear(); ++session_;
@@ -239,6 +249,7 @@ void Capture::add_packet(Packet packet) {
                 active_flows_.erase(oldest);
             }
             Flow f; f.id = "tcp-" + std::to_string(next_flow_++);
+            f.first = packet.timestamp_us;
             active_flows_[key] = f;
         }
         Flow& f = active_flows_.at(key);
@@ -263,6 +274,9 @@ void Capture::add_packet(Packet packet) {
     }
     bytes_ += memory_cost(packet);
     packets_.push_back(std::move(packet));
+    trim_packets();
+}
+void Capture::trim_packets() {
     while (!packets_.empty() && (packets_.size() > capacity_ || bytes_ > memory_limit_)) {
         bytes_ -= memory_cost(packets_.front()); packets_.pop_front(); ++evicted_;
     }
@@ -325,11 +339,12 @@ bool matches(const Packet& p, const std::string& protocol,
 }
 std::string Capture::packets_json(uint64_t after, const std::string& protocol,
                                  const std::string& search, const std::string& flow,
-                                 std::optional<int64_t> from_us, std::optional<int64_t> to_us) const {
+                                 std::optional<int64_t> from_us, std::optional<int64_t> to_us) {
     validate_protocol(protocol);
     if ((from_us && *from_us <= 0) || (to_us && *to_us <= 0) ||
         (from_us && to_us && *from_us > *to_us)) throw std::invalid_argument("Invalid time interval");
     std::lock_guard<std::mutex> lock(mutex_);
+    refresh_owner_events();
     auto needle = lower(search);
     uint64_t cursor = after;
     std::size_t count = 0;
@@ -348,10 +363,11 @@ std::string Capture::packets_json(uint64_t after, const std::string& protocol,
         + ",\"gap\":" + ((after && oldest > after && oldest - after > 1) ? "true" : "false") + '}';
 }
 std::string Capture::timeline_json(uint64_t after, const std::string& protocol,
-                                  const std::string& search, const std::string& flow, std::size_t bins) const {
+                                  const std::string& search, const std::string& flow, std::size_t bins) {
     validate_protocol(protocol);
     if (bins < 16 || bins > 200) throw std::invalid_argument("Bins must be 16..200");
     std::lock_guard<std::mutex> lock(mutex_);
+    refresh_owner_events();
     const auto needle = lower(search);
     std::vector<const Packet*> selected;
     int64_t start = 0, end = 0;
@@ -398,8 +414,9 @@ std::string Capture::timeline_json(uint64_t after, const std::string& protocol,
     out << "]}";
     return out.str();
 }
-std::string Capture::packet_json(uint64_t id) const {
+std::string Capture::packet_json(uint64_t id) {
     std::lock_guard<std::mutex> lock(mutex_);
+    refresh_owner_events();
     auto it = std::find_if(packets_.begin(), packets_.end(), [id](const Packet& p) { return p.id == id; });
     if (it == packets_.end()) return {};
     auto result = packet_summary(*it); result.pop_back();
@@ -417,10 +434,57 @@ std::string Capture::packet_json(uint64_t id) const {
     for (auto byte : it->bytes) { result += digits[byte >> 4]; result += digits[byte & 15]; }
     return result + "\"}";
 }
-std::string Capture::flows_json() const {
+// 查询时补录事件，覆盖最后一个数据包之后才送达的事件。
+void Capture::refresh_owner_events() {
+    if (!owner_events_.is_open() || packets_.empty()) return;
+    const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    owner_events_.clear();
+    for (unsigned i = 0; i < 256; ++i) {
+        const auto offset = owner_events_.tellg();
+        std::string line;
+        if (!std::getline(owner_events_, line) || owner_events_.eof()) {
+            owner_events_.clear();
+            owner_events_.seekg(offset);
+            break;
+        }
+        std::istringstream row(line);
+        ProcessOwner owner;
+        int64_t when;
+        unsigned local_port, remote_port;
+        std::string local, remote;
+        if (!(row >> when >> owner.uid >> owner.pid >> owner.start_ticks >>
+              local >> local_port >> remote >> remote_port) || owner.uid != getuid()) continue;
+        std::getline(row >> std::ws, owner.name);
+        const auto a = endpoint(local, local_port), b = endpoint(remote, remote_port);
+        auto found = active_flows_.find(a < b ? a + "|" + b : b + "|" + a);
+        if (found == active_flows_.end()) {
+            // 等待 libpcap 交付对应连接的首包。
+            if (state_ == "running" && when > now - 250000) {
+                owner_events_.seekg(offset);
+                break;
+            }
+            continue;
+        }
+        auto& flow = found->second;
+        if ((!flow.have_syn_a && !flow.have_syn_b) || when < flow.first - 2000 ||
+            when > flow.last + 250000 || flow.processes.size() >= 32) continue;
+        if (std::any_of(flow.processes.begin(), flow.processes.end(),
+            [&](const auto& p) { return p.key() == owner.key(); })) continue;
+        flow.processes.push_back(owner);
+        for (auto& packet : packets_) if (packet.flow_id == flow.id) {
+            bytes_ -= memory_cost(packet);
+            packet.processes = flow.processes;
+            bytes_ += memory_cost(packet);
+        }
+        trim_packets();
+    }
+}
+std::string Capture::flows_json() {
     struct Summary { std::string a, b, state = "active"; uint64_t packets = 0, bytes = 0; int64_t start = 0, last = 0; bool fa = false, fb = false; std::vector<ProcessOwner> owners; };
     std::map<std::string, Summary> flows;
     std::lock_guard<std::mutex> lock(mutex_);
+    refresh_owner_events();
     for (const auto& p : packets_) {
         if (p.flow_id.empty()) continue;
         auto& f = flows[p.flow_id];
