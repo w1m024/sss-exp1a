@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$HOME/exp1a"
+sample_dir="$HOME/exp1a-demo"
+url=http://127.0.0.1:18080/demo.txt
+plugin=wireshark/dns_analysis.lua
+pcap_default=/mnt/c/Users/wm/Downloads/dns-demo.pcap
+
+start_http() {
+    python3 -m http.server 18080 --bind 127.0.0.1 --directory "$sample_dir" &
+    http_pid=$!
+    trap 'kill "$http_pid" 2>/dev/null || true; wait "$http_pid" 2>/dev/null || true' EXIT
+    # 等待服务就绪，检查本身不产生 TCP 连接。
+    for _ in {1..30}; do
+        kill -0 "$http_pid" 2>/dev/null || return 1
+        if ss -H -ltn 'sport = :18080' | grep -q .; then
+            kill -0 "$http_pid" 2>/dev/null || return 1
+            return 0
+        fi
+        sleep .1
+    done
+    echo 'HTTP 服务未能在 18080 就绪。' >&2
+    return 1
+}
+
+dns() {
+    python3 "$sample_dir/dns.py"
+}
+
+case "${1:-help}" in
+    nps)
+        ping -4 -c 4 127.0.0.1
+        ping -6 -c 2 ::1
+        ;;
+    npa)
+        start_http
+        curl --noproxy '*' --http1.1 --fail --silent --show-error "$url"
+        ping -4 -c 2 127.0.0.1
+        ping -6 -c 2 ::1
+        dns
+        ;;
+    dns)
+        dns
+        ;;
+    flows)
+        start_http
+        python3 "$sample_dir/flows.py"
+        ;;
+    plugin)
+        pcap="${2:-$pcap_default}"
+        if [[ ! -r "$pcap" ]]; then
+            printf '找不到 pcap：%s\n用法：~/exp1a-demo/demo plugin /路径/文件.pcap\n' "$pcap" >&2
+            exit 1
+        fi
+        set -x
+        tshark -n -2 -r "$pcap" -X "lua_script:$plugin" \
+            -Y dns_analysis.query -T fields -E header=y \
+            -e frame.number -e dns_analysis.query -e dns_analysis.labels \
+            -e dns_analysis.longest_label -e dns_analysis.response_ms
+        tshark -n -2 -r "$pcap" -X "lua_script:$plugin" \
+            -Y 'dns_analysis.longest_label == 7' -T fields \
+            -e frame.number -e dns_analysis.query
+        ;;
+    help|-h|--help)
+        cat <<'HELP'
+用法: ./demo <命令>
+
+命令:
+  ./demo nps       发送 IPv4 和 IPv6 ping，验证捕获过滤
+  ./demo npa       生成 HTTP、DNS 和 ping 流量，演示协议筛选与分析
+  ./demo flows     同一进程建立两条 TCP 连接，按 Enter 结束
+  ./demo dns       生成一组本地 DNS 查询与响应，供抓包导出
+  ./demo plugin    读取下载目录中的 dns-demo.pcap，加载 Lua 插件
+                   也可指定文件：./demo plugin /路径/文件.pcap
+HELP
+        ;;
+    *)
+        echo "未知步骤：$1" >&2
+        exit 2
+        ;;
+esac
