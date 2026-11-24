@@ -10,18 +10,12 @@
 sudo apt install build-essential cmake pkg-config libpcap-dev libcap2-bin
 ```
 
-在项目根目录编译。安装脚本将抓包辅助程序放入系统目录并授予抓包权限：
+在项目根目录依次执行以下命令。第一条编译项目，第二条使用 `sudo` 安装抓包辅助程序并授予抓包权限，第三条以普通用户启动网页服务。
 
 ```bash
-cmake -S . -B build
-cmake --build build -j2
-sudo bash scripts/install-capture-helper.sh
-```
-
-使用普通用户启动服务：
-
-```bash
-bash scripts/run.sh
+bash scripts/quickstart.sh build
+bash scripts/quickstart.sh install
+bash scripts/quickstart.sh web
 ```
 
 浏览器打开 http://127.0.0.1:8080/，选择要监听的网络接口（可先选择 any）并点击 Record 开始抓包。停止服务时在终端按 Ctrl+C。
@@ -29,14 +23,13 @@ bash scripts/run.sh
 可选的 eBPF 进程追踪由 Linux 内核在 TCP 建连和接受连接时记录进程信息，即使进程很快退出，也能保留它与连接的关联。需要 Ubuntu 的 `clang` 和 `libbpf-dev` 软件包，以及支持 BTF（内核类型信息）的 Linux 内核，可查看 `/sys/kernel/btf/vmlinux` 是否存在。在项目根目录执行：
 
 ```bash
-cmake -S . -B build -DWIRELENS_TCP_OWNER=ON
-cmake --build build -j2
+bash scripts/quickstart.sh build -DWIRELENS_TCP_OWNER=ON
 events=$(mktemp)
 echo "$events"
 sudo "$PWD/build/wirelens-tcp-owner" "$PWD/build/tcp_owner.bpf.o" "$(id -u)" > "$events"
 ```
 
-看到 `TCP owner probe ready` 后，在同一 Linux 环境的另一个终端，用普通用户进入项目根目录并执行 `WIRELENS_TCP_OWNER_EVENTS=/实际输出的文件路径 bash scripts/run.sh`，然后开始抓包。探针需要特权，网页服务仍以普通用户运行。实验结束后按 Ctrl+C 停止探针，再删除事件文件。
+看到 `TCP owner probe ready` 后，在同一 Linux 环境的另一个终端，用普通用户进入项目根目录并执行 `WIRELENS_TCP_OWNER_EVENTS=/实际输出的文件路径 bash scripts/quickstart.sh web`，然后开始抓包。探针需要特权，网页服务仍以普通用户运行。实验结束后按 Ctrl+C 停止探针，再删除事件文件。
 
 # 功能实现
 
